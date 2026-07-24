@@ -38,40 +38,54 @@ func (t Task) RegisterAddClassInfosToESTask() {
 	//程序开始时先执行一次
 	go func() {
 		xnm, xqm := tool.GetXnmAndXqm(time.Now())
-		clog.LogPrinter.Info("开始执行 RegisterAddClassInfosToESTask 任务")
-		t.classServiceUserCase.AddClassInfosToES(ctx, xnm, xqm)
-
-		clog.LogPrinter.Info("等待数据刷新")
-		//等待数据刷新
-		time.Sleep(5 * time.Second)
-
-		clog.LogPrinter.Info("开始执行 SaveFreeClassRoomFromLocal 任务")
-		_ = t.freeClassroomBiz.SaveFreeClassRoomFromLocal(ctx, xnm, xqm)
+		for attempt := 1; attempt <= 3; attempt++ {
+			if err := t.syncLocalClassroomData(ctx, xnm, xqm); err == nil {
+				return
+			} else {
+				clog.LogPrinter.Errorf("sync local classroom data failed (year=%s semester=%s attempt=%d): %v", xnm, xqm, attempt, err)
+			}
+			if attempt < 3 {
+				time.Sleep(time.Duration(attempt) * 10 * time.Second)
+			}
+		}
 	}()
 
 	// 每天凌晨 3 点执行
 	err := t.AddTask("0 3 * * *", func() {
 		xnm, xqm := tool.GetXnmAndXqm(time.Now())
-		clog.LogPrinter.Info("开始执行 AddClassInfosToES 任务")
-		t.classServiceUserCase.AddClassInfosToES(ctx, xnm, xqm)
-		clog.LogPrinter.Info("开始执行 SaveFreeClassRoomFromLocal 任务")
-		_ = t.freeClassroomBiz.SaveFreeClassRoomFromLocal(ctx, xnm, xqm)
+		if err := t.syncLocalClassroomData(ctx, xnm, xqm); err != nil {
+			clog.LogPrinter.Errorf("scheduled local classroom sync failed (year=%s semester=%s): %v", xnm, xqm, err)
+		}
 	})
 	if err != nil {
 		panic(err)
 	}
 }
 
+func (t Task) syncLocalClassroomData(ctx context.Context, xnm, xqm string) error {
+	clog.LogPrinter.Infof("start syncing class data to es (year=%s semester=%s)", xnm, xqm)
+	if err := t.classServiceUserCase.AddClassInfosToES(ctx, xnm, xqm); err != nil {
+		return err
+	}
+
+	// Elasticsearch is near-real-time. Wait for its refresh before deriving occupancy documents.
+	time.Sleep(5 * time.Second)
+	clog.LogPrinter.Infof("start deriving classroom occupancy (year=%s semester=%s)", xnm, xqm)
+	return t.freeClassroomBiz.SaveFreeClassRoomFromLocal(ctx, xnm, xqm)
+}
+
 // RegisterClearClassInfoTask 清洁任务
 func (t Task) RegisterClearClassInfoTask() {
 	ctx := context.Background()
 
-	// 每天凌晨5点执行（5字段格式）
+	// 每天凌晨 5 点清理非当前学期数据。
 	err := t.AddTask("0 5 * * *", func() {
 		clog.LogPrinter.Info("开始执行 ClearClassInfo 任务")
 		xnm, xqm := tool.GetXnmAndXqm(time.Now())
 		t.classServiceUserCase.DeleteSchoolClassInfosFromES(ctx, xnm, xqm)
-		_ = t.freeClassroomBiz.ClearClassroomOccupancyFromES(ctx, xnm, xqm)
+		if err := t.freeClassroomBiz.ClearClassroomOccupancyFromES(ctx, xnm, xqm); err != nil {
+			clog.LogPrinter.Errorf("ClearClassroomOccupancyFromES failed (year=%s semester=%s): %v", xnm, xqm, err)
+		}
 	})
 	if err != nil {
 		panic(err)

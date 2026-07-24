@@ -46,10 +46,11 @@ func (c *ClassServiceUserCase) SearchClassInfo(ctx context.Context, keyWords str
 	return c.es.SearchClassInfo(ctx, keyWords, xnm, xqm, page, pageSize)
 }
 
-func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm string) {
+func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm string) error {
 	//xnm, xqm := tool.GetXnmAndXqm()
 	reqTime := "1949-10-01T00:00:00.000000"
 	var tasks []string
+	var syncedAny bool
 
 	defer func() {
 		_ = c.cache.Del(ctx, tasks...)
@@ -57,13 +58,14 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 
 	for {
 		classInfos, lastTime, err := c.cs.GetAllSchoolClassInfos(ctx, xnm, xqm, reqTime)
-		if len(classInfos) == 0 {
-			clog.LogPrinter.Warnf("request other service but get 0 classes")
-			return
-		}
 		if err != nil {
-			clog.LogPrinter.Errorf("failed to get all classlist")
-			return
+			return fmt.Errorf("failed to get all classlist (year=%s semester=%s cursor=%s): %w", xnm, xqm, reqTime, err)
+		}
+		if len(classInfos) == 0 {
+			if !syncedAny {
+				return fmt.Errorf("classlist service returned no classes for year=%s semester=%s", xnm, xqm)
+			}
+			return nil
 		}
 
 		// 使用分布式锁来确保只有一个实例在执行
@@ -74,6 +76,7 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 
 		if err != nil {
 			clog.LogPrinter.Infof("the lock is not get, maybe other instance is doing this job")
+			syncedAny = true
 			reqTime = lastTime
 			continue
 		}
@@ -88,6 +91,7 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 
 		status, err := c.cache.Get(ctx, taskName)
 		if err == nil && status == Finished {
+			syncedAny = true
 			// 解锁
 			ok, err1 := locker.Unlock()
 			if !ok || err1 != nil {
@@ -107,7 +111,10 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 				clog.LogPrinter.Errorf("failed to set %v %v", taskName, err1)
 			}
 			clog.LogPrinter.Errorf("add classlist[%v] failed: %v", classInfos, err)
+			_, _ = locker.Unlock()
+			return fmt.Errorf("failed to add %d classes to es: %w", len(classInfos), err)
 		}
+		syncedAny = true
 
 		clog.LogPrinter.Infof("es has save %d classes", len(classInfos))
 
@@ -126,7 +133,6 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 
 		reqTime = lastTime
 	}
-
 }
 func (c *ClassServiceUserCase) DeleteSchoolClassInfosFromES(ctx context.Context, xnm, xqm string) {
 	//xnm, xqm := tool.GetXnmAndXqm()

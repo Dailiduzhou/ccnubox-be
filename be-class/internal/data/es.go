@@ -104,13 +104,18 @@ func createInitialClassrooms(cli *elastic.Client) error {
 	if err != nil {
 		return err
 	}
+	if len(data.ClassRooms) == 0 {
+		return fmt.Errorf("classrooms.json contains no classrooms")
+	}
 
+	classroomValues := make([]interface{}, 0, len(data.ClassRooms))
 	for _, classroom := range data.ClassRooms {
 		tmp := struct {
 			Where string `json:"where"`
 		}{
 			Where: classroom,
 		}
+		classroomValues = append(classroomValues, classroom)
 		_, err = cli.Index().
 			Index(classroomIndex).
 			Id(fmt.Sprintf("%v", classroom)).
@@ -121,6 +126,20 @@ func createInitialClassrooms(cli *elastic.Client) error {
 			return err
 		}
 	}
-	clog.LogPrinter.Info("保存教室成功")
+
+	// keepData=true 时索引不会重建，需要显式删除网页列表中已经不存在的旧教室。
+	deleteResponse, err := cli.DeleteByQuery().
+		Index(classroomIndex).
+		Query(elastic.NewBoolQuery().MustNot(elastic.NewTermsQuery("where", classroomValues...))).
+		Conflicts("proceed").
+		Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to delete stale classrooms: %w", err)
+	}
+	if _, err = cli.Refresh(classroomIndex).Do(context.Background()); err != nil {
+		return fmt.Errorf("failed to refresh classroom index: %w", err)
+	}
+
+	clog.LogPrinter.Infof("保存 %d 个教室成功，删除 %d 个旧教室", len(data.ClassRooms), deleteResponse.Deleted)
 	return nil
 }

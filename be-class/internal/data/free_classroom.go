@@ -37,6 +37,22 @@ func (f *FreeClassroomData) GetAllClassroom(ctx context.Context, wherePrefix str
 	return f.getAllWheres(ctx, wherePrefix)
 }
 
+func (f *FreeClassroomData) HasClassroomOccupancy(ctx context.Context, year, semester string) (bool, error) {
+	query := elastic.NewBoolQuery().Filter(
+		elastic.NewTermQuery("year", year),
+		elastic.NewTermQuery("semester", semester),
+	)
+
+	count, err := f.cli.Count().
+		Index(freeClassroomIndex).
+		Query(query).
+		Do(ctx)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (f *FreeClassroomData) AddClassroomOccupancy(ctx context.Context, year, semester string, cwtPairs ...model.CTWPair) error {
 	// 定义文档结构
 	type ClassroomOccupancy struct {

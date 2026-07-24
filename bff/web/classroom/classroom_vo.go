@@ -3,13 +3,13 @@ package classroom
 import cs "github.com/asynccnu/ccnubox-be/common/api/gen/proto/classService/v1"
 
 type GetFreeClassRoomReq struct {
-	Year        string  `form:"year"`        // 学年
-	Semester    string  `form:"semester"`    // 学期
-	Week        int32   `form:"week"`        // 哪一周
-	Day         int32   `form:"day"`         // 哪一天
-	Sections    []int32 `form:"sections"`    // 哪几节课（多个字段：sections=1&sections=2）
-	WherePrefix string  `form:"wherePrefix"` // 地点前缀
-	StuID       string  `form:"stuID"`       // 学号
+	Year        string  `form:"year" binding:"required"`                             // 学年
+	Semester    string  `form:"semester" binding:"required,oneof=1 2 3"`             // 学期
+	Week        int32   `form:"week" binding:"required,gte=1,lte=30"`                // 哪一周
+	Day         int32   `form:"day" binding:"required,gte=1,lte=7"`                  // 哪一天
+	Sections    []int32 `form:"sections" binding:"required,min=1,dive,gte=1,lte=12"` // 哪几节课（多个字段：sections=1&sections=2）
+	WherePrefix string  `form:"wherePrefix" binding:"required"`                      // 地点前缀
+	StuID       string  `form:"stuID"`                                               // 学号
 }
 
 type ClassroomAvailableStat struct {
