@@ -23,6 +23,7 @@ import (
 
 const (
 	FreeClassRoomCacheKeyPrefix = "ccnubox_freeclassroom:v2"
+	freeClassroomReadyKeyPrefix = "ccnubox_freeclassroom_ready:v1"
 	freeClassroomQueryURL       = "https://bkzhjw.ccnu.edu.cn/jsxsd/kbxx/jsjy_query2"
 	freeClassroomReferer        = "https://bkzhjw.ccnu.edu.cn/jsxsd/kbxx/jsjy_query"
 	freeClassroomTimeModelID    = "16FD8C2BE55E15F9E0630100007FF6B5"
@@ -37,7 +38,7 @@ type FreeClassRoomData interface {
 	AddClassroomOccupancy(ctx context.Context, year, semester string, cwtPairs ...model.CTWPair) error
 	ClearClassroomOccupancy(ctx context.Context, year, semester string) error
 	GetAllClassroom(ctx context.Context, wherePrefix string) ([]string, error)
-	HasClassroomOccupancy(ctx context.Context, year, semester string) (bool, error)
+	RefreshClassroomOccupancy(ctx context.Context) error
 	QueryAvailableClassrooms(ctx context.Context, year, semester string, week, day, section int, wherePrefix string, allWheres []string) (map[string]bool, error)
 }
 
@@ -80,6 +81,11 @@ func (f *FreeClassroomBiz) SaveFreeClassRoomFromLocal(ctx context.Context, year,
 	page := 1
 	var tasks []string
 	var savedAny bool
+	readyKey := classroomOccupancyReadyKey(year, semester)
+
+	if err := f.cache.Del(ctx, readyKey); err != nil {
+		return fmt.Errorf("failed to clear classroom occupancy readiness for year=%s semester=%s: %w", year, semester, err)
+	}
 
 	defer func() {
 		_ = f.cache.Del(ctx, tasks...)
@@ -103,13 +109,7 @@ func (f *FreeClassroomBiz) SaveFreeClassRoomFromLocal(ctx context.Context, year,
 
 		lockErr := locker.Lock()
 		if lockErr != nil {
-			clog.LogPrinter.Infof("Error don't get lock %v: %v", lockKey, lockErr)
-			// 判断是否已经获取完所有数据
-			if page*pageSize >= total {
-				break
-			}
-			page++
-			continue
+			return fmt.Errorf("failed to acquire classroom occupancy sync lock %s: %w", lockKey, lockErr)
 		}
 
 		clog.LogPrinter.Infof("Lock %v success", lockKey)
@@ -207,7 +207,17 @@ func (f *FreeClassroomBiz) SaveFreeClassRoomFromLocal(ctx context.Context, year,
 	if !savedAny {
 		return fmt.Errorf("no valid classroom occupancy generated for year=%s semester=%s", year, semester)
 	}
+	if err := f.freeClassRoomData.RefreshClassroomOccupancy(ctx); err != nil {
+		return fmt.Errorf("failed to refresh classroom occupancy index: %w", err)
+	}
+	if err := f.cache.Set(ctx, readyKey, Finished, 2*Expire); err != nil {
+		return fmt.Errorf("failed to mark classroom occupancy ready for year=%s semester=%s: %w", year, semester, err)
+	}
 	return nil
+}
+
+func classroomOccupancyReadyKey(year, semester string) string {
+	return fmt.Sprintf("%s:%s:%s", freeClassroomReadyKeyPrefix, year, semester)
 }
 
 func (f *FreeClassroomBiz) SaveFreeClassRoomInfo(ctx context.Context, year, semester string, cwtPairs []model.CTWPair) error {
@@ -456,11 +466,11 @@ func toLowerASCII(ch byte) byte {
 }
 
 func (f *FreeClassroomBiz) queryAvailableClassroomFromLocal(ctx context.Context, year, semester string, week, day int, sections []int, wherePrefix string, allWheres []string) (map[string][]bool, error) {
-	ready, err := f.freeClassRoomData.HasClassroomOccupancy(ctx, year, semester)
+	status, err := f.cache.Get(ctx, classroomOccupancyReadyKey(year, semester))
 	if err != nil {
 		return nil, fmt.Errorf("failed to check local classroom occupancy readiness: %w", err)
 	}
-	if !ready {
+	if status != Finished {
 		return nil, fmt.Errorf("local classroom occupancy data is not ready for year=%s semester=%s", year, semester)
 	}
 

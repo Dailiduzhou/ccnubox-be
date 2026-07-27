@@ -44,9 +44,7 @@ func (f fakeCache) SExpire(_ context.Context, _ string, _ time.Duration) error {
 }
 
 type fakeFreeClassRoomData struct {
-	ready        bool
-	readinessErr error
-	queryCalled  bool
+	queryCalled bool
 }
 
 func (f *fakeFreeClassRoomData) AddClassroomOccupancy(context.Context, string, string, ...model.CTWPair) error {
@@ -61,8 +59,8 @@ func (f *fakeFreeClassRoomData) GetAllClassroom(context.Context, string) ([]stri
 	return nil, nil
 }
 
-func (f *fakeFreeClassRoomData) HasClassroomOccupancy(context.Context, string, string) (bool, error) {
-	return f.ready, f.readinessErr
+func (f *fakeFreeClassRoomData) RefreshClassroomOccupancy(context.Context) error {
+	return nil
 }
 
 func (f *fakeFreeClassRoomData) QueryAvailableClassrooms(context.Context, string, string, int, int, int, string, []string) (map[string]bool, error) {
@@ -278,8 +276,8 @@ func TestIsFreeClassroomCellNormalizesBlankStrings(t *testing.T) {
 }
 
 func TestQueryAvailableClassroomFromLocalRejectsUnreadyData(t *testing.T) {
-	data := &fakeFreeClassRoomData{ready: false}
-	f := NewFreeClassroomBiz(nil, data, nil, nil, nil, nil)
+	data := &fakeFreeClassRoomData{}
+	f := NewFreeClassroomBiz(nil, data, nil, nil, fakeCache{data: map[string]string{}}, nil)
 
 	_, err := f.queryAvailableClassroomFromLocal(context.Background(), "2024", "2", 6, 1, []int{1}, "n1", []string{"n101"})
 	if err == nil {
@@ -287,6 +285,21 @@ func TestQueryAvailableClassroomFromLocalRejectsUnreadyData(t *testing.T) {
 	}
 	if data.queryCalled {
 		t.Fatal("availability query should not run before local data is ready")
+	}
+}
+
+func TestQueryAvailableClassroomFromLocalUsesCompletionMarker(t *testing.T) {
+	data := &fakeFreeClassRoomData{}
+	cache := fakeCache{data: map[string]string{
+		classroomOccupancyReadyKey("2024", "2"): Finished,
+	}}
+	f := NewFreeClassroomBiz(nil, data, nil, nil, cache, nil)
+
+	if _, err := f.queryAvailableClassroomFromLocal(context.Background(), "2024", "2", 6, 1, []int{1}, "n1", []string{"n101"}); err != nil {
+		t.Fatalf("expected completed occupancy data to be queryable: %v", err)
+	}
+	if !data.queryCalled {
+		t.Fatal("expected availability query after completion marker")
 	}
 }
 
