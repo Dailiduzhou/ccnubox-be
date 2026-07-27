@@ -3,30 +3,31 @@ package script
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/valyala/fastjson"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
+const (
+	freeClassroomQueryURL    = "https://bkzhjw.ccnu.edu.cn/jsxsd/kbxx/jsjy_query2"
+	freeClassroomReferer     = "https://bkzhjw.ccnu.edu.cn/jsxsd/kbxx/jsjy_query"
+	freeClassroomTimeModelID = "16FD8C2BE55E15F9E0630100007FF6B5"
+)
+
 type Data struct {
 	ClassRooms []string `json:"class_rooms"`
+	PruneStale bool     `json:"prune_stale"`
 }
 
-// 3,7,8,9,10,n 只爬这几个楼
 func GetAllClassRooms(year, semester, cookie string) error {
-	cli := &http.Client{}
-	var wherePrefixs = []string{"3", "7", "8", "9", "10", "n"}
-
-	var res []string
-	for _, wherePrefix := range wherePrefixs {
-		classrooms, err := getAllClassRooms(cli, year, semester, wherePrefix, cookie)
-		if err != nil {
-			return err
-		}
-		res = append(res, classrooms...)
+	cli := &http.Client{Timeout: 30 * time.Second}
+	classrooms, err := getAllClassRooms(cli, year, semester, cookie)
+	if err != nil {
+		return err
 	}
 
 	f, err := os.Create("internal/data/classrooms.json")
@@ -34,78 +35,121 @@ func GetAllClassRooms(year, semester, cookie string) error {
 		return err
 	}
 	defer f.Close()
+
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
-	if err = encoder.Encode(&Data{ClassRooms: res}); err != nil {
-		return err
-	}
-	return nil
+	return encoder.Encode(&Data{
+		ClassRooms: classrooms,
+		PruneStale: false,
+	})
 }
 
-func getAllClassRooms(cli *http.Client, year, semester, wherePrefix, cookie string) ([]string, error) {
-	var mp = map[string]string{
-		"1": "3",
-		"2": "12",
-		"3": "16",
+func getAllClassRooms(cli *http.Client, year, semester, cookie string) ([]string, error) {
+	termCode, err := academicTermCode(year, semester)
+	if err != nil {
+		return nil, err
 	}
-	var campus = 1
-	if wherePrefix[0] == 'n' {
-		campus = 2
+
+	form := url.Values{
+		"xnxqh":      {termCode},
+		"xqbh":       {""},
+		"jxqbh":      {""},
+		"jxlbh":      {""},
+		"jsbh":       {""},
+		"jslx":       {""},
+		"bjfh":       {"="},
+		"rnrs":       {""},
+		"yx":         {""},
+		"kbjcmsid":   {freeClassroomTimeModelID},
+		"selectZc":   {"1"},
+		"startdate":  {""},
+		"enddate":    {""},
+		"selectXq":   {"1,2,3,4,5,6,7"},
+		"selectJc":   {"0102,0304,0506,0708,0910,1112"},
+		"syjs0601id": {""},
+		"typewhere":  {"jszq"},
 	}
-	var data = strings.NewReader(fmt.Sprintf(`fwzt=cx&xqh_id=%d&xnm=%s&xqm=%s&cdlb_id=&cdejlb_id=&qszws=&jszws=&cdmc=%s&lh=&jyfs=0&cdjylx=&sfbhkc=&zcd=%d&xqj=%d&jcd=%d&_search=false&nd=%d&queryModel.showCount=1000&queryModel.currentPage=1&queryModel.sortName=cdbh+&queryModel.sortOrder=asc&time=1`,
-		campus, year, mp[semester], wherePrefix, 1<<(1-1), 6, 1<<(12-1), time.Now().UnixMilli()))
-	req, err := http.NewRequest("POST", "https://xk.ccnu.edu.cn/jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155", data)
+
+	req, err := http.NewRequest(http.MethodPost, freeClassroomQueryURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header = http.Header{
-		"Cookie":       []string{cookie},
-		"Content-Type": []string{"application/x-www-form-urlencoded;charset=UTF-8"},
-		"User-Agent":   []string{"Mozilla/5.0"}, // 精简UA
+		"Accept":           []string{"application/json, text/javascript, */*; q=0.01"},
+		"Accept-Language":  []string{"zh-CN,zh;q=0.9"},
+		"Content-Type":     []string{"application/x-www-form-urlencoded; charset=UTF-8"},
+		"Cookie":           []string{cookie},
+		"Origin":           []string{"https://bkzhjw.ccnu.edu.cn"},
+		"Referer":          []string{freeClassroomReferer},
+		"User-Agent":       []string{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"},
+		"X-Requested-With": []string{"XMLHttpRequest"},
 	}
+
 	resp, err := cli.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// 读取 Body 到字节数组
-	bodyBytes, err := io.ReadAll(resp.Body)
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("classroom upstream returned HTTP %d: %.300s", resp.StatusCode, strings.Join(strings.Fields(string(body)), " "))
+	}
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	classrooms, err := extractCdIDsWithFastjson(bodyBytes, wherePrefix)
-	if err != nil {
-		return nil, err
-	}
-	return classrooms, nil
+	return extractClassroomNames(body)
 }
-func extractCdIDsWithFastjson(rawJSON []byte, prefix string) ([]string, error) {
-	var p fastjson.Parser
-	v, err := p.ParseBytes(rawJSON)
-	if err != nil {
-		return nil, err
+
+func academicTermCode(year, semester string) (string, error) {
+	if semester != "1" && semester != "2" && semester != "3" {
+		return "", fmt.Errorf("invalid semester %q", semester)
+	}
+	startYearText := strings.TrimSpace(strings.Split(year, "-")[0])
+	startYear, err := strconv.Atoi(startYearText)
+	if err != nil || startYear < 2000 || startYear > 3000 {
+		return "", fmt.Errorf("invalid academic year %q", year)
+	}
+	return fmt.Sprintf("%d-%d-%s", startYear, startYear+1, semester), nil
+}
+
+func extractClassroomNames(rawJSON []byte) ([]string, error) {
+	var response []json.RawMessage
+	if err := json.Unmarshal(rawJSON, &response); err != nil {
+		return nil, fmt.Errorf("upstream response is not JSON: %w", err)
+	}
+	if len(response) < 5 {
+		return nil, fmt.Errorf("unexpected upstream response length %d", len(response))
 	}
 
-	items := v.Get("items")
-	if items == nil || items.Type() != fastjson.TypeArray {
-		return nil, fmt.Errorf("items not found or not an array")
+	var rows [][]json.RawMessage
+	if err := json.Unmarshal(response[4], &rows); err != nil {
+		return nil, fmt.Errorf("invalid classroom rows: %w", err)
 	}
-	var cdIDs []string
-	for _, item := range items.GetArray() {
-		cdID := item.GetStringBytes("cd_id")
-		if cdID != nil && strings.HasPrefix(string(cdID), prefix) && !containsSpecialChars(string(cdID)) && (len(string(cdID))-len(prefix)) == 3 {
-			cdIDs = append(cdIDs, string(cdID))
+
+	classrooms := make([]string, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for rowIndex, row := range rows {
+		if len(row) == 0 {
+			return nil, fmt.Errorf("invalid classroom row %d: row is empty", rowIndex)
 		}
-	}
-	return cdIDs, nil
-}
-func containsSpecialChars(s string) bool {
-	for _, r := range s {
-		if !(r >= 'a' && r <= 'z') &&
-			!(r >= 'A' && r <= 'Z') &&
-			!(r >= '0' && r <= '9') {
-			return true
+		var classroom string
+		if err := json.Unmarshal(row[0], &classroom); err != nil {
+			return nil, fmt.Errorf("invalid classroom row %d name: %w", rowIndex, err)
 		}
+		classroom = strings.TrimSpace(classroom)
+		if classroom == "" {
+			return nil, fmt.Errorf("invalid classroom row %d: classroom name is empty", rowIndex)
+		}
+		if _, ok := seen[classroom]; ok {
+			continue
+		}
+		seen[classroom] = struct{}{}
+		classrooms = append(classrooms, classroom)
 	}
-	return false
+	if len(classrooms) == 0 {
+		return nil, fmt.Errorf("upstream returned no classrooms")
+	}
+	return classrooms, nil
 }

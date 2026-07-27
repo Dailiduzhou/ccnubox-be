@@ -37,6 +37,11 @@ func (f *FreeClassroomData) GetAllClassroom(ctx context.Context, wherePrefix str
 	return f.getAllWheres(ctx, wherePrefix)
 }
 
+func (f *FreeClassroomData) RefreshClassroomOccupancy(ctx context.Context) error {
+	_, err := f.cli.Refresh(freeClassroomIndex).Do(ctx)
+	return err
+}
+
 func (f *FreeClassroomData) AddClassroomOccupancy(ctx context.Context, year, semester string, cwtPairs ...model.CTWPair) error {
 	// 定义文档结构
 	type ClassroomOccupancy struct {

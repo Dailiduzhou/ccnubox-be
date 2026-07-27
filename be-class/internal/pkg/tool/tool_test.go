@@ -37,7 +37,13 @@ func TestGetXnmAndXqm(t *testing.T) {
 			name:    "Test in July",
 			args:    args{currentTime: time.Date(2023, 7, 1, 0, 0, 0, 0, time.UTC)},
 			wantXnm: "2022",
-			wantXqm: "3",
+			wantXqm: "2",
+		},
+		{
+			name:    "Test in August",
+			args:    args{currentTime: time.Date(2023, 8, 1, 0, 0, 0, 0, time.UTC)},
+			wantXnm: "2023",
+			wantXqm: "1",
 		},
 	}
 	for _, tt := range tests {
