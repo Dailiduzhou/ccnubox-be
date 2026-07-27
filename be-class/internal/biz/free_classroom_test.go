@@ -239,6 +239,25 @@ func TestExtractFreeClassroomsFromQuery2(t *testing.T) {
 	}
 }
 
+func TestExtractFreeClassroomsFromQuery2RejectsPartialWeek(t *testing.T) {
+	raw, err := json.Marshal([]any{
+		[]map[string]string{{"jc1": "1", "jc2": "2"}},
+		1,
+		6,
+		[]string{"一", "星期一"},
+		[]any{[]any{"n401", nil, nil, nil, nil, nil, nil, "room-id", "(48/10)", "多媒体教室"}},
+		6,
+		make([]any, 6),
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+
+	if _, err := extractFreeClassroomsFromQuery2(raw); err == nil {
+		t.Fatal("expected a partial-week response to be rejected")
+	}
+}
+
 func TestQueryAvailableClassroomFromLocalRejectsUnreadyData(t *testing.T) {
 	data := &fakeFreeClassRoomData{ready: false}
 	f := NewFreeClassroomBiz(nil, data, nil, nil, nil, nil)

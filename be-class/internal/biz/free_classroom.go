@@ -665,7 +665,7 @@ func extractFreeClassroomsFromQuery2(rawJSON []byte) (freeClassroomSchedule, err
 	if err := json.Unmarshal(response[5], &dayCount); err != nil {
 		return nil, fmt.Errorf("invalid day count: %w", err)
 	}
-	if dayCount < 1 || dayCount > 7 {
+	if dayCount != 7 {
 		return nil, fmt.Errorf("invalid day count %d", dayCount)
 	}
 	var arguments []json.RawMessage
