@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -719,7 +720,15 @@ func extractFreeClassroomsFromQuery2(rawJSON []byte) (freeClassroomSchedule, err
 
 func isFreeClassroomCell(cell json.RawMessage) bool {
 	value := strings.TrimSpace(string(cell))
-	return value == "" || value == "null" || value == `""`
+	if value == "" || value == "null" {
+		return true
+	}
+
+	var text string
+	if err := json.Unmarshal(cell, &text); err != nil {
+		return false
+	}
+	return strings.TrimSpace(html.UnescapeString(text)) == ""
 }
 
 func selectFreeClassrooms(schedule freeClassroomSchedule, campus, day int, sections []int, wherePrefix string) map[int][]string {

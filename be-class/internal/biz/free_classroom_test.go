@@ -258,6 +258,25 @@ func TestExtractFreeClassroomsFromQuery2RejectsPartialWeek(t *testing.T) {
 	}
 }
 
+func TestIsFreeClassroomCellNormalizesBlankStrings(t *testing.T) {
+	for _, cell := range []json.RawMessage{
+		nil,
+		json.RawMessage(`null`),
+		json.RawMessage(`""`),
+		json.RawMessage(`"  "`),
+		json.RawMessage(`"&nbsp;"`),
+		json.RawMessage(`"&#160;"`),
+	} {
+		if !isFreeClassroomCell(cell) {
+			t.Errorf("expected %q to be treated as free", cell)
+		}
+	}
+
+	if isFreeClassroomCell(json.RawMessage(`"<iconpark-icon name=\"shangke\"></iconpark-icon>"`)) {
+		t.Fatal("expected an occupied HTML cell not to be treated as free")
+	}
+}
+
 func TestQueryAvailableClassroomFromLocalRejectsUnreadyData(t *testing.T) {
 	data := &fakeFreeClassRoomData{ready: false}
 	f := NewFreeClassroomBiz(nil, data, nil, nil, nil, nil)
