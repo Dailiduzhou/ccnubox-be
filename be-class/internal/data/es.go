@@ -98,6 +98,7 @@ var classListBytes []byte
 func createInitialClassrooms(cli *elastic.Client) error {
 	var data struct {
 		ClassRooms []string `json:"class_rooms"`
+		PruneStale bool     `json:"prune_stale"`
 	}
 
 	err := json.Unmarshal(classListBytes, &data)
@@ -127,19 +128,25 @@ func createInitialClassrooms(cli *elastic.Client) error {
 		}
 	}
 
-	// keepData=true 时索引不会重建，需要显式删除网页列表中已经不存在的旧教室。
-	deleteResponse, err := cli.DeleteByQuery().
-		Index(classroomIndex).
-		Query(elastic.NewBoolQuery().MustNot(elastic.NewTermsQuery("where", classroomValues...))).
-		Conflicts("proceed").
-		Do(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to delete stale classrooms: %w", err)
+	var deleted int64
+	if data.PruneStale {
+		// 删除旧教室具有破坏性，只允许经过人工核对的目录显式开启。
+		deleteResponse, err := cli.DeleteByQuery().
+			Index(classroomIndex).
+			Query(elastic.NewBoolQuery().MustNot(elastic.NewTermsQuery("where", classroomValues...))).
+			Conflicts("proceed").
+			Do(context.Background())
+		if err != nil {
+			return fmt.Errorf("failed to delete stale classrooms: %w", err)
+		}
+		deleted = deleteResponse.Deleted
+	} else {
+		clog.LogPrinter.Warn("classroom catalog has not enabled stale cleanup; keeping existing classrooms")
 	}
 	if _, err = cli.Refresh(classroomIndex).Do(context.Background()); err != nil {
 		return fmt.Errorf("failed to refresh classroom index: %w", err)
 	}
 
-	clog.LogPrinter.Infof("保存 %d 个教室成功，删除 %d 个旧教室", len(data.ClassRooms), deleteResponse.Deleted)
+	clog.LogPrinter.Infof("保存 %d 个教室成功，删除 %d 个旧教室", len(data.ClassRooms), deleted)
 	return nil
 }

@@ -20,6 +20,7 @@ const (
 
 type Data struct {
 	ClassRooms []string `json:"class_rooms"`
+	PruneStale bool     `json:"prune_stale"`
 }
 
 func GetAllClassRooms(year, semester, cookie string) error {
@@ -37,7 +38,10 @@ func GetAllClassRooms(year, semester, cookie string) error {
 
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(&Data{ClassRooms: classrooms})
+	return encoder.Encode(&Data{
+		ClassRooms: classrooms,
+		PruneStale: false,
+	})
 }
 
 func getAllClassRooms(cli *http.Client, year, semester, cookie string) ([]string, error) {
