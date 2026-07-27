@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -89,12 +90,8 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 		status, err := c.cache.Get(ctx, taskName)
 		if err == nil && status == Finished {
 			syncedAny = true
-			// 解锁
-			ok, err1 := locker.Unlock()
-			if !ok || err1 != nil {
-				clog.LogPrinter.Errorf("unlock %v failed: %v", lockKey, err1)
-			} else {
-				clog.LogPrinter.Infof("unlock %v successfully", lockKey)
+			if err := unlockClassSync(locker, lockKey); err != nil {
+				return err
 			}
 
 			reqTime = lastTime
@@ -108,8 +105,11 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 				clog.LogPrinter.Errorf("failed to set %v %v", taskName, err1)
 			}
 			clog.LogPrinter.Errorf("add classlist[%v] failed: %v", classInfos, err)
-			_, _ = locker.Unlock()
-			return fmt.Errorf("failed to add %d classes to es: %w", len(classInfos), err)
+			syncErr := fmt.Errorf("failed to add %d classes to es: %w", len(classInfos), err)
+			if unlockErr := unlockClassSync(locker, lockKey); unlockErr != nil {
+				return errors.Join(syncErr, unlockErr)
+			}
+			return syncErr
 		}
 		syncedAny = true
 
@@ -120,17 +120,26 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 			clog.LogPrinter.Errorf("failed to set %v %v", taskName, err)
 		}
 
-		// 解锁
-		ok, err := locker.Unlock()
-		if !ok || err != nil {
-			clog.LogPrinter.Errorf("unlock %v failed: %v", lockKey, err)
-		} else {
-			clog.LogPrinter.Infof("unlock %v successfully", lockKey)
+		if err := unlockClassSync(locker, lockKey); err != nil {
+			return err
 		}
 
 		reqTime = lastTime
 	}
 }
+
+func unlockClassSync(locker lock.Locker, lockKey string) error {
+	ok, err := locker.Unlock()
+	if err != nil {
+		return fmt.Errorf("failed to unlock class sync lock %s: %w", lockKey, err)
+	}
+	if !ok {
+		return fmt.Errorf("failed to unlock class sync lock %s: lock was not released", lockKey)
+	}
+	clog.LogPrinter.Infof("unlock %v successfully", lockKey)
+	return nil
+}
+
 func (c *ClassServiceUserCase) DeleteSchoolClassInfosFromES(ctx context.Context, xnm, xqm string) {
 	//xnm, xqm := tool.GetXnmAndXqm()
 	c.es.ClearClassInfo(ctx, xnm, xqm)
