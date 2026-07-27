@@ -75,10 +75,7 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 		err = locker.Lock()
 
 		if err != nil {
-			clog.LogPrinter.Infof("the lock is not get, maybe other instance is doing this job")
-			syncedAny = true
-			reqTime = lastTime
-			continue
+			return fmt.Errorf("failed to acquire class sync lock %s: %w", lockKey, err)
 		}
 
 		// 成功获取到锁
