@@ -126,17 +126,17 @@ func extractClassroomNames(rawJSON []byte) ([]string, error) {
 
 	classrooms := make([]string, 0, len(rows))
 	seen := make(map[string]struct{}, len(rows))
-	for _, row := range rows {
+	for rowIndex, row := range rows {
 		if len(row) == 0 {
-			continue
+			return nil, fmt.Errorf("invalid classroom row %d: row is empty", rowIndex)
 		}
 		var classroom string
 		if err := json.Unmarshal(row[0], &classroom); err != nil {
-			continue
+			return nil, fmt.Errorf("invalid classroom row %d name: %w", rowIndex, err)
 		}
 		classroom = strings.TrimSpace(classroom)
 		if classroom == "" {
-			continue
+			return nil, fmt.Errorf("invalid classroom row %d: classroom name is empty", rowIndex)
 		}
 		if _, ok := seen[classroom]; ok {
 			continue

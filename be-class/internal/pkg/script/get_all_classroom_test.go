@@ -41,3 +41,23 @@ func TestExtractClassroomNames(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
+func TestExtractClassroomNamesRejectsMalformedRows(t *testing.T) {
+	raw, err := json.Marshal([]any{
+		[]any{},
+		1,
+		7,
+		[]string{"一", "星期一"},
+		[]any{
+			[]any{"n401", nil, "id-1", "(48/10)", "多媒体教室"},
+			[]any{map[string]string{"name": "n402"}, nil, "id-2", "(48/10)", "多媒体教室"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+
+	if _, err := extractClassroomNames(raw); err == nil {
+		t.Fatal("expected malformed classroom rows to be rejected")
+	}
+}
