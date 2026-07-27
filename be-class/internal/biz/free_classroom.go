@@ -248,7 +248,10 @@ func (f *FreeClassroomBiz) SearchAvailableClassroom(ctx context.Context, year, s
 	crawlResultCh := make(chan crawlResult, 1)
 
 	go func() {
-		freeClassroomMp, err := f.getFreeClassrooms(ctx, year, semester, stuID, week, day, sections, wherePrefix)
+		crawlCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 40*time.Second)
+		defer cancel()
+
+		freeClassroomMp, err := f.getFreeClassrooms(crawlCtx, year, semester, stuID, week, day, sections, wherePrefix)
 		if err != nil {
 			crawlResultCh <- crawlResult{err: err}
 			return
