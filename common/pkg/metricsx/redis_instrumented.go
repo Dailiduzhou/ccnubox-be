@@ -229,16 +229,36 @@ func (r *InstrumentedRedis) Ping(ctx context.Context) *redis.StatusCmd {
 	return cmd
 }
 
-// Pipeline 返回的 pipeline 暂时直接透传, 不会对 pipeline 内部的命令做埋点。
-// 已知限制: 使用 Pipeline 的链路(批量 MSET/MGET 等)目前不会出现在 ccnubox_redis_* 指标里。
-// TODO: 实现一个 instrumentedPipeliner, 在 Exec() 时统一上报整体耗时和错误数。
+// Pipeline 在 Exec 时上报一次批处理的整体耗时和结果。
 func (r *InstrumentedRedis) Pipeline() redis.Pipeliner {
-	return r.Cmdable.Pipeline()
+	return &instrumentedPipeliner{
+		Pipeliner: r.Cmdable.Pipeline(),
+		redis:     r,
+		operation: "PIPELINE",
+	}
 }
 
-// TxPipeline 同 Pipeline, 暂未埋点。详见 Pipeline 的注释。
+// TxPipeline 在 Exec 时上报一次事务批处理的整体耗时和结果。
 func (r *InstrumentedRedis) TxPipeline() redis.Pipeliner {
-	return r.Cmdable.TxPipeline()
+	return &instrumentedPipeliner{
+		Pipeliner: r.Cmdable.TxPipeline(),
+		redis:     r,
+		operation: "TXPIPELINE",
+	}
+}
+
+type instrumentedPipeliner struct {
+	redis.Pipeliner
+	redis     *InstrumentedRedis
+	operation string
+}
+
+func (p *instrumentedPipeliner) Exec(ctx context.Context) ([]redis.Cmder, error) {
+	start := time.Now()
+	cmds, err := p.Pipeliner.Exec(ctx)
+	p.redis.observeOperation(p.operation, time.Since(start), err)
+	return cmds, err
 }
 
 var _ redis.Cmdable = (*InstrumentedRedis)(nil)
+var _ redis.Pipeliner = (*instrumentedPipeliner)(nil)
