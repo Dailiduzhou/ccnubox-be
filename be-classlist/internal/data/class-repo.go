@@ -118,8 +118,6 @@ func (cla ClassRepo) CacheClass(ctx context.Context, stuID, year, semester strin
 	}
 	if err := cla.ClaRepo.Cache.AddClaInfosToCache(ctx, stuID, year, semester, classInfos); err != nil {
 		logh.Warnf("Failed to populate cache for [%v %v %v]: %v", stuID, year, semester, err)
-	} else {
-		// 添加缓存失败，就尝试删除
 		if err := cla.ClaRepo.Cache.DeleteClassInfoFromCache(ctx, stuID, year, semester); err != nil {
 			logh.Warnf("Failed to delete cache for [%v %v %v]: %v", stuID, year, semester, err)
 		}
