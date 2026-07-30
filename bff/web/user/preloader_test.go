@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -29,5 +30,24 @@ func TestAcademicYear(t *testing.T) {
 				t.Fatalf("academicYear(%v) = %q, want %q", tt.now, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunPreloadOutlivesParentCancellation(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := make(chan error, 1)
+	runPreload(parent, func(ctx context.Context) {
+		result <- ctx.Err()
+	})
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("preload context was canceled with parent: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("preload task did not run")
 	}
 }

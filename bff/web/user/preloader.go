@@ -40,35 +40,45 @@ type preLoader struct {
 	currentSemester string
 }
 
+const preloadTimeout = 15 * time.Second
+
 func (l *preLoader) PreLoad(ctx context.Context, studentId string) {
 	// 预创建feed的配置列表
-	go func() {
+	runPreload(ctx, func(ctx context.Context) {
 		_, _ = l.feedClient.FindOrCreateAllowList(ctx, &feedv1.FindOrCreateAllowListReq{StudentId: studentId})
-	}()
+	})
 
 	// 异步获取学生成绩,不需要等待结果
-	go func() {
+	runPreload(ctx, func(ctx context.Context) {
 		_, _ = l.gradeClient.GetGradeScore(ctx, &gradev1.GetGradeScoreReq{
 			StudentId: studentId,
 		})
-	}()
+	})
 
-	go func() {
+	runPreload(ctx, func(ctx context.Context) {
 		_, _ = l.gradeClient.GetGradeByTerm(ctx, &gradev1.GetGradeByTermReq{
 			StudentId: studentId,
 			Refresh:   true,
 			Kcxzmcs:   []string{"1"},
 		})
-	}()
+	})
 
 	// 异步获取学生课表,不需要等待结果
-	go func() {
+	runPreload(ctx, func(ctx context.Context) {
 		_, _ = l.classerClient.GetClass(ctx, &classlistv1.GetClassRequest{
 			Refresh:  true,
 			StuId:    studentId,
 			Year:     academicYear(time.Now()),
 			Semester: l.currentSemester,
 		})
+	})
+}
+
+func runPreload(parent context.Context, task func(context.Context)) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), preloadTimeout)
+		defer cancel()
+		task(ctx)
 	}()
 }
 
