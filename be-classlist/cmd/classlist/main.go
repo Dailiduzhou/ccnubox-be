@@ -56,14 +56,14 @@ func newApp(env *b_conf.Env, logger log.Logger, gs *grpc.Server, r *etcd.Registr
 
 func main() {
 	flag.Parse()
-	var bc conf.Bootstrap
+	var bc *conf.Bootstrap
 	if os.Getenv(conf.ClassList) != "" {
-		bootstrap := conf.InitBootstrap()
-		if bootstrap == nil {
+		bc = conf.InitBootstrap()
+		if bc == nil {
 			panic("nacos 配置初始化失败")
 		}
-		bc = *bootstrap
 	} else {
+		bc = &conf.Bootstrap{}
 		c := config.New(
 			config.WithSource(
 				file.NewSource(flagconf),
@@ -73,7 +73,7 @@ func main() {
 		if err := c.Load(); err != nil {
 			panic(err)
 		}
-		if err := c.Scan(&bc); err != nil {
+		if err := c.Scan(bc); err != nil {
 			panic(err)
 		}
 	}
