@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/asynccnu/ccnubox-be/be-grade/crawler"
 	"github.com/asynccnu/ccnubox-be/be-grade/domain"
@@ -19,6 +20,27 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestReserveGradeRefreshThrottlesByStudent(t *testing.T) {
+	service := &gradeService{
+		nextRefresh:     make(map[string]time.Time),
+		refreshInterval: time.Minute,
+	}
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+
+	if !service.reserveGradeRefresh("student-a", now) {
+		t.Fatal("first refresh was not reserved")
+	}
+	if service.reserveGradeRefresh("student-a", now.Add(30*time.Second)) {
+		t.Fatal("refresh inside interval was reserved")
+	}
+	if !service.reserveGradeRefresh("student-b", now.Add(30*time.Second)) {
+		t.Fatal("different student's refresh was throttled")
+	}
+	if !service.reserveGradeRefresh("student-a", now.Add(time.Minute)) {
+		t.Fatal("refresh after interval was not reserved")
+	}
 }
 
 type cachedGradeDAO struct {
