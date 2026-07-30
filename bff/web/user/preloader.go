@@ -2,6 +2,8 @@ package user
 
 import (
 	"context"
+	"strconv"
+	"time"
 
 	classlistv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/classlist/v1"
 	feedv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/feed/v1"
@@ -27,7 +29,6 @@ func NewPreLoader(
 		feedClient:      feedClient,
 		l:               l,
 		currentSemester: viper.GetString("classlist.currentSemester"),
-		currentYear:     viper.GetString("classlist.currentYear"),
 	}
 }
 
@@ -37,7 +38,6 @@ type preLoader struct {
 	feedClient      feedv1.FeedServiceClient
 	l               logger.Logger
 	currentSemester string
-	currentYear     string
 }
 
 func (l *preLoader) PreLoad(ctx context.Context, studentId string) {
@@ -66,8 +66,16 @@ func (l *preLoader) PreLoad(ctx context.Context, studentId string) {
 		_, _ = l.classerClient.GetClass(ctx, &classlistv1.GetClassRequest{
 			Refresh:  true,
 			StuId:    studentId,
-			Year:     l.currentYear,
+			Year:     academicYear(time.Now()),
 			Semester: l.currentSemester,
 		})
 	}()
+}
+
+func academicYear(now time.Time) string {
+	year := now.Year()
+	if now.Month() < time.September {
+		year--
+	}
+	return strconv.Itoa(year)
 }
