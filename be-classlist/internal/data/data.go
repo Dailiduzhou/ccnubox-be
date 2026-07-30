@@ -100,7 +100,7 @@ func NewRedisDB(c *conf.Data, logger logger.Logger) *redis.Client {
 
 func initProducerConfig(username, password string) *sarama.Config {
 	producerConfig := sarama.NewConfig()
-	producerConfig.Net.SASL.Enable = true
+	producerConfig.Net.SASL.Enable = username != "" || password != ""
 	producerConfig.Net.SASL.User = username
 	producerConfig.Net.SASL.Password = password
 	producerConfig.Net.SASL.Mechanism = sarama.SASLTypePlaintext
@@ -119,7 +119,7 @@ func initProducerConfig(username, password string) *sarama.Config {
 
 func initConsumerConfig(username, password string) *sarama.Config {
 	consumerConfig := sarama.NewConfig()
-	consumerConfig.Net.SASL.Enable = true
+	consumerConfig.Net.SASL.Enable = username != "" || password != ""
 	consumerConfig.Net.SASL.User = username
 	consumerConfig.Net.SASL.Password = password
 	consumerConfig.Net.SASL.Mechanism = sarama.SASLTypePlaintext
