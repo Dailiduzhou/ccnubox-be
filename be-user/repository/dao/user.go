@@ -16,6 +16,7 @@ var (
 type UserDAO interface {
 	FindByStudentId(ctx context.Context, sid string) (*model.User, error)
 	Save(ctx context.Context, u *model.User) error
+	Delete(ctx context.Context, sid string) error
 }
 
 type GORMUserDAO struct {
@@ -34,6 +35,17 @@ func (dao *GORMUserDAO) Save(ctx context.Context, u *model.User) error {
 		return errorx.Errorf("dao: save user failed, student_id: %s, err: %w", u.StudentId, err)
 	}
 
+	return nil
+}
+
+func (dao *GORMUserDAO) Delete(ctx context.Context, sid string) error {
+	result := dao.db.WithContext(ctx).Where("student_id = ?", sid).Delete(&model.User{})
+	if result.Error != nil {
+		return errorx.Errorf("dao: delete user failed, student_id: %s, err: %w", sid, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return UserNotFound
+	}
 	return nil
 }
 

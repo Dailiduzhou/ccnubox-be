@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,6 +34,7 @@ var (
 
 type UserService interface {
 	Save(ctx context.Context, studentId string, password string) error
+	Delete(ctx context.Context, studentId string, password string) error
 	GetCookie(ctx context.Context, studentId string, tpe ...string) (string, error)
 	GetLibrarySeatToken(ctx context.Context, studentId string) (string, error)
 	GetLibraryDiscussionToken(ctx context.Context, studentId string) (string, error)
@@ -52,6 +54,27 @@ type userService struct {
 func NewUserService(dao dao.UserDAO, cache cache.UserCache, cryptoClient *crypto.Crypto, ccnu ccnuv1.CCNUServiceClient, l logger.Logger,
 	pClient proxy.Client) UserService {
 	return &userService{dao: dao, cache: cache, cryptoClient: cryptoClient, ccnu: ccnu, l: l, pClient: pClient}
+}
+
+func (s *userService) Delete(ctx context.Context, studentId string, password string) error {
+	user, err := s.dao.FindByStudentId(ctx, studentId)
+	if err != nil {
+		return USER_NOT_FOUND_ERROR(errorx.Errorf("service: find user for deletion failed, sid: %s, err: %w", studentId, err))
+	}
+	storedPassword, err := s.cryptoClient.Decrypt(user.Password)
+	if err != nil {
+		return DECRYPT_ERROR(errorx.Errorf("service: decrypt password for deletion failed, sid: %s, err: %w", studentId, err))
+	}
+	if subtle.ConstantTimeCompare([]byte(storedPassword), []byte(password)) != 1 {
+		return InCorrectPassword(errorx.New("service: delete user password mismatch"))
+	}
+	if err := s.dao.Delete(ctx, studentId); err != nil {
+		return DEFAULT_DAO_ERROR(errorx.Errorf("service: delete user failed, sid: %s, err: %w", studentId, err))
+	}
+	if err := s.cache.DeleteUserData(ctx, studentId); err != nil {
+		s.l.WithContext(ctx).Warn("service: deleted user but failed to clear cache", logger.String("sid", studentId), logger.Error(err))
+	}
+	return nil
 }
 
 func (s *userService) Save(ctx context.Context, studentId string, password string) error {

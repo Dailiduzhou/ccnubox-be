@@ -2,7 +2,6 @@ package user
 
 import (
 	"context"
-	"errors"
 
 	"github.com/asynccnu/ccnubox-be/bff/errs"
 	"github.com/asynccnu/ccnubox-be/bff/pkg/ginx"
@@ -180,13 +179,18 @@ func (h *UserHandler) RefreshToken(ctx *gin.Context) (web.Response, error) {
 // @Failure 500 {object} web.Response "注销失败或 token 清理失败，code=51401"
 // @Router /users/deactivate [post]
 func (h *UserHandler) DeleteAccount(ctx *gin.Context, req DeleteAccountReq, cla ijwt.UserClaims) (web.Response, error) {
-	// todo:这里目前只是伪逻辑，具体的身份验证、软删除、恢复码、恢复码等需要后续实现
-	// todo: 通过数据库比较输入和用户真正密码,目前仅是判断是否为空
-	if cla.Password == "" {
-		return web.Response{}, errs.USER_SID_OR_PASSWORD_ERROR(errors.New("password do not match"))
+	_, err := h.userClient.DeleteUser(ctx, &userv1.DeleteUserReq{
+		StudentId: cla.StudentId,
+		Password:  req.Password,
+	})
+	if userv1.IsIncorrectPasswordError(err) {
+		return web.Response{}, errs.USER_SID_OR_PASSWORD_ERROR(err)
+	}
+	if err != nil {
+		return web.Response{}, errs.DEACTIVATE_ACCOUNT_ERROR(err)
 	}
 
-	err := h.ClearToken(ctx)
+	err = h.ClearToken(ctx)
 	if err != nil {
 		return web.Response{}, errs.JWT_SYSTEM_ERROR(err)
 	}
