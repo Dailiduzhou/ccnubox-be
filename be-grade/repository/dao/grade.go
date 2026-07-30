@@ -7,6 +7,7 @@ import (
 	"github.com/asynccnu/ccnubox-be/be-grade/repository/model"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // GradeDAO 数据库操作的集合
@@ -101,33 +102,35 @@ func (d *gradeDAO) BatchInsertOrUpdate(ctx context.Context, grades []model.Grade
 		}
 	}
 
-	// 2. 执行插入
-	if len(toInsert) > 0 {
-		if err = d.db.WithContext(ctx).Create(&toInsert).Error; err != nil {
-			return nil, errorx.Errorf("dao: BatchInsertOrUpdate bulk insert failed, count: %d, err: %w", len(toInsert), err)
-		}
-	}
-
-	// 3. 执行更新
-	if len(toUpdate) > 0 {
-		// 这里使用事务保证批量更新的一致性
-		err = d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			for _, g := range toUpdate {
-				if err := tx.Model(&model.Grade{}).
-					Where("student_id = ? AND jxb_id = ?", g.StudentId, g.JxbId).
-					Updates(&g).Error; err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+	changed := make([]model.Grade, 0, len(toInsert)+len(toUpdate))
+	changed = append(changed, toInsert...)
+	changed = append(changed, toUpdate...)
+	if len(changed) > 0 {
+		err = d.db.WithContext(ctx).
+			Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "student_id"}, {Name: "jxb_id"}},
+				DoUpdates: clause.AssignmentColumns(gradeUpdateColumns(ifDetail)),
+			}).
+			Create(&changed).Error
 		if err != nil {
-			return nil, errorx.Errorf("dao: BatchInsertOrUpdate bulk update transaction failed, count: %d, err: %w", len(toUpdate), err)
+			return nil, errorx.Errorf("dao: BatchInsertOrUpdate bulk upsert failed, count: %d, err: %w", len(changed), err)
 		}
 	}
 
 	affectedGrades = toInsert
 	return affectedGrades, nil
+}
+
+func gradeUpdateColumns(ifDetail bool) []string {
+	columns := []string{
+		"kc_id", "kcmc", "xnm", "xqm", "xf", "kcxzmc", "kclbmc", "kcbj", "jd", "cj",
+	}
+	if ifDetail {
+		columns = append(columns,
+			"regular_grade_percent", "regular_grade", "final_grade_percent", "final_grade",
+		)
+	}
+	return columns
 }
 
 func (d *gradeDAO) GetDistinctGradeType(ctx context.Context, stuID string) ([]string, error) {
