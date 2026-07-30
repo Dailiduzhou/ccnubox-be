@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	userv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/user/v1"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 
 	"strings"
@@ -14,17 +13,11 @@ import (
 )
 
 type LoginMiddleware struct {
-	handler    ijwt.Handler
-	userClient userv1.UserServiceClient
+	handler ijwt.Handler
 }
 
-func NewLoginMiddleWare(hdl ijwt.Handler, userClient userv1.UserServiceClient) *LoginMiddleware {
-
-	l := &LoginMiddleware{
-		handler:    hdl,
-		userClient: userClient,
-	}
-	return l
+func NewLoginMiddleWare(hdl ijwt.Handler) *LoginMiddleware {
+	return &LoginMiddleware{handler: hdl}
 }
 
 func (m *LoginMiddleware) MiddlewareFunc() gin.HandlerFunc {
@@ -81,18 +74,5 @@ func (m *LoginMiddleware) extractUserClaimsFromAuthorizationHeader(ctx *gin.Cont
 		// err如果是redis崩溃导致，考虑进行降级，不再验证是否退出 refresh_token降级的话收益会很少，因为是低频接口
 		return ijwt.UserClaims{}, errorx.New("session检验：失败")
 	}
-	password, err := m.handler.DecryptPasswordFromClaims(&uc)
-	if err != nil {
-		return ijwt.UserClaims{}, errorx.Errorf("解密失败:%w", err)
-	}
-	// TODO 临时逻辑,用于解决秘钥不统一的问题,后续需要删除
-	_, err = m.userClient.SaveUser(ctx, &userv1.SaveUserReq{
-		StudentId: uc.StudentId,
-		Password:  password,
-	})
-	if err != nil {
-		return ijwt.UserClaims{}, err
-	}
-
 	return uc, nil
 }
