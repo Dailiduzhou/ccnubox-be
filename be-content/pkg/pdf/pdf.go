@@ -3,12 +3,18 @@ package pdf
 import (
 	"bytes"
 	"fmt"
-	"github.com/jung-kurt/gofpdf"
 	"io"
 	"net/http"
 	"path"
 	"strings"
+	"time"
+
+	"github.com/jung-kurt/gofpdf"
 )
+
+const maxDownloadSize = 32 << 20
+
+var downloadClient = &http.Client{Timeout: 30 * time.Second}
 
 // CreatePDFfromImageLinks 从给定的图片链接数组生成 PDF，并返回其字节流
 func CreatePDFfromImageLinks(imageLinks []string) ([]byte, error) {
@@ -77,22 +83,29 @@ func DetermineImageType(link string, imgBytes []byte) string {
 
 // GetBytesFromLink 从给定的链接获取图片的字节流
 func GetBytesFromLink(url string) ([]byte, error) {
-
-	client := http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-	resp, err := client.Do(req)
+	resp, err := downloadClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s returned status %s", url, resp.Status)
+	}
+	if resp.ContentLength > maxDownloadSize {
+		return nil, fmt.Errorf("download %s exceeds %d bytes", url, maxDownloadSize)
+	}
 
-	imgBytes, err := io.ReadAll(resp.Body)
+	imgBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(imgBytes) > maxDownloadSize {
+		return nil, fmt.Errorf("download %s exceeds %d bytes", url, maxDownloadSize)
 	}
 
 	return imgBytes, nil
