@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,6 +15,20 @@ func NewCorsMiddleware() *CorsMiddleware {
 
 type CorsMiddleware struct{}
 
+func isAllowedOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+
+	host := strings.ToLower(parsed.Hostname())
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+
+	return host == "muxixyz.com" || strings.HasSuffix(host, ".muxixyz.com")
+}
+
 func (c *CorsMiddleware) MiddlewareFunc() gin.HandlerFunc {
 	return cors.New(cors.Config{
 		// 允许的请求头
@@ -22,15 +37,8 @@ func (c *CorsMiddleware) MiddlewareFunc() gin.HandlerFunc {
 		ExposeHeaders: []string{"x-jwt-token", "x-refresh-token", "X-Trace-Id"}, //前面那两个不太敢动,正常格式是要大小写对齐的,等之后有了测试环境再试
 		// 是否允许携带凭证（如 Cookies）
 		AllowCredentials: true,
-		// 解决跨域问题,当是以localhost或者muxixyz.com开头的时候就允许跨域
-		AllowOriginFunc: func(origin string) bool {
-			//检测请求来源是否以localhost开头
-			if strings.HasPrefix(origin, "localhost") {
-				return true
-			}
-			//检测请求来源是否以muxixyz.com开头 TODO 这里目前没有限制可能需要修改
-			return strings.Contains(origin, "")
-		},
+		// 仅允许本地开发环境和 muxixyz.com 的可信子域。
+		AllowOriginFunc: isAllowedOrigin,
 
 		// 预检请求的缓存时间
 		MaxAge: 12 * time.Hour,
