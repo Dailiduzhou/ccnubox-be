@@ -55,29 +55,29 @@ func NewUserService(dao dao.UserDAO, cache cache.UserCache, cryptoClient *crypto
 }
 
 func (s *userService) Save(ctx context.Context, studentId string, password string) error {
-	// 密码加密
-	encryptedPwd, err := s.cryptoClient.Encrypt(password)
-	if err != nil {
-		return ENCRYPT_ERROR(errorx.Errorf("service: encrypt failed, err: %w", err))
-	}
-
 	user, err := s.dao.FindByStudentId(ctx, studentId)
 	switch {
 	case err == nil:
-		//如果需要更新则更新,否则直接返回
-		if user.Password != encryptedPwd {
-			user.Password = encryptedPwd
-		} else {
+		storedPassword, decryptErr := s.cryptoClient.Decrypt(user.Password)
+		if decryptErr != nil {
+			return DECRYPT_ERROR(errorx.Errorf("service: decrypt stored password failed, sid: %s, err: %w", studentId, decryptErr))
+		}
+		if storedPassword == password && !s.cryptoClient.NeedsMigration(user.Password) {
 			return nil
 		}
 	case errors.Is(err, dao.UserNotFound):
 		user = &model.User{
 			StudentId: studentId,
-			Password:  encryptedPwd,
 		}
 	default:
 		return DEFAULT_DAO_ERROR(errorx.Errorf("service: find user failed, sid: %s, err: %w", studentId, err))
 	}
+
+	encryptedPwd, err := s.cryptoClient.Encrypt(password)
+	if err != nil {
+		return ENCRYPT_ERROR(errorx.Errorf("service: encrypt failed, err: %w", err))
+	}
+	user.Password = encryptedPwd
 
 	if err = s.dao.Save(ctx, user); err != nil {
 		return SAVE_USER_ERROR(errorx.Errorf("service: dao save failed, sid: %s, err: %w", studentId, err))
