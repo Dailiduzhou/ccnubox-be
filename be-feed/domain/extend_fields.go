@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+
 	"github.com/ecodeclub/ekit"
 )
 
@@ -14,7 +15,7 @@ func (f ExtendFields) Get(key string) ekit.AnyValue {
 	val, ok := f[key]
 	if !ok {
 		return ekit.AnyValue{
-			Err: fmt.Errorf("%w, key %s", errKeyNotFound),
+			Err: fmt.Errorf("%w, key %s", errKeyNotFound, key),
 		}
 	}
 	return ekit.AnyValue{Val: val}
