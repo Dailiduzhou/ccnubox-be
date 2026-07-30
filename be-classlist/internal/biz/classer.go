@@ -402,13 +402,13 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 	logh := logger.GetLoggerFromCtx(ctx)
 	crawSuccess := true
 	defer func(currentTime time.Time) {
-		logh.Info(fmt.Sprintf("[%v %v %v] getCourseFromCrawler(success:%v) took %v", stuID, year, semester, crawSuccess, time.Since(currentTime)))
+		logh.Debug(fmt.Sprintf("getCourseFromCrawler(year:%v semester:%v success:%v) took %v", year, semester, crawSuccess, time.Since(currentTime)))
 	}(time.Now())
 
 	cookie, err := func() (string, error) {
 		cookieSuccess := true
 		defer func(currentTime time.Time) {
-			logh.Info(fmt.Sprintf("Get cookie (stu_id:%v,success:%v) from other service,cost %v", stuID, cookieSuccess, time.Since(currentTime)))
+			logh.Debug(fmt.Sprintf("Get cookie (success:%v) from other service,cost %v", cookieSuccess, time.Since(currentTime)))
 		}(time.Now())
 
 		cookie, err := cluc.ccnu.GetCookie(ctx, stuID)
@@ -443,12 +443,12 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 
 	ci, sc, sum, err := func() ([]*ClassInfoBO, []*StudentCourse, int, error) {
 		defer func(currentTime time.Time) {
-			logh.Info(fmt.Sprintf("craw class [%v,%v,%v] cost %v", stuID, year, semester, time.Since(currentTime)))
+			logh.Debug(fmt.Sprintf("craw class [year:%v semester:%v] cost %v", year, semester, time.Since(currentTime)))
 		}(time.Now())
 
 		classinfos, scs, sum, err := stu.GetClass(ctx, stuID, year, semester, cookie, cluc.crawler)
 		if err != nil {
-			logh.Error(fmt.Sprintf("craw classlist(stu_id:%v year:%v semester:%v cookie:%v) failed: %v", stuID, year, semester, cookie, err))
+			logh.Error(fmt.Sprintf("craw classlist(stu_id:%v year:%v semester:%v) failed: %v", stuID, year, semester, err))
 			return nil, nil, -1, err
 		}
 		if len(classinfos) == 0 || len(scs) == 0 {
@@ -592,7 +592,7 @@ func (cluc *ClassUsecase) cacheClass(
 			for stuID := range jobs {
 				if tool.IsGraduated(stuID) {
 					// 跳过已经毕业的学生
-					log.Infof("worker-%d skipping graduated student %s", id, stuID)
+					log.Debugf("worker-%d skipped graduated student", id)
 					continue
 				}
 
@@ -602,7 +602,7 @@ func (cluc *ClassUsecase) cacheClass(
 					return
 				}
 
-				log.Infof("worker-%d processing student %s", id, stuID)
+				log.Debugf("worker-%d processing student", id)
 
 				// 缓存课表
 				cluc.classRepo.CacheClass(ctx, stuID, year, semester)
@@ -628,9 +628,8 @@ func (cluc *ClassUsecase) cacheClass(
 			break
 		}
 
-		firstID := stuIDs[0]
 		lastPageID := stuIDs[len(stuIDs)-1]
-		log.Infof("enqueueing %d student ids range %s-%s", len(stuIDs), firstID, lastPageID)
+		log.Infof("enqueueing %d student ids", len(stuIDs))
 
 		for _, id := range stuIDs {
 			jobs <- id
@@ -643,7 +642,7 @@ func (cluc *ClassUsecase) cacheClass(
 	wg.Wait()
 
 	total := processed.Load()
-	log.Infof("Finished PullClassListTask processed=%d lastStuID=%s", total, lastStuID)
+	log.Infof("Finished PullClassListTask processed=%d", total)
 }
 
 // cleanRecycleBinTask 定时清理回收站中 zset 里已经过期的元素
@@ -690,10 +689,10 @@ func (cluc *ClassUsecase) cleanRecycleBinTask(
 					return
 				}
 
-				log.Infof("worker-%d cleaning recycle bin for student %s", id, stuID)
+				log.Debugf("worker-%d cleaning recycle bin", id)
 
 				if err := cluc.recycleBinRepo.CleanExpired(ctx, stuID, year, semester); err != nil {
-					log.Warnf("worker-%d clean recycle bin failed for student %s: %v", id, stuID, err)
+					log.Warnf("worker-%d clean recycle bin failed: %v", id, err)
 				}
 
 				count := processed.Add(1)
@@ -717,9 +716,8 @@ func (cluc *ClassUsecase) cleanRecycleBinTask(
 			break
 		}
 
-		firstID := stuIDs[0]
 		lastPageID := stuIDs[len(stuIDs)-1]
-		log.Infof("enqueueing %d student ids range %s-%s", len(stuIDs), firstID, lastPageID)
+		log.Infof("enqueueing %d student ids", len(stuIDs))
 
 		for _, id := range stuIDs {
 			jobs <- id
@@ -732,5 +730,5 @@ func (cluc *ClassUsecase) cleanRecycleBinTask(
 	wg.Wait()
 
 	total := processed.Load()
-	log.Infof("Finished CleanRecycleBinTask processed=%d lastStuID=%s", total, lastStuID)
+	log.Infof("Finished CleanRecycleBinTask processed=%d", total)
 }
