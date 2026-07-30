@@ -3,31 +3,27 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"github.com/asynccnu/ccnubox-be/be-class/internal/model"
-	"github.com/stretchr/testify/assert"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
+
+	"github.com/asynccnu/ccnubox-be/be-class/internal/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/xuri/excelize/v2"
 )
 
 // 模拟的 FreeClassRoomSaver 实现，用于测试
-type MockFreeClassRoomBiz struct{}
+type MockFreeClassRoomBiz struct {
+	year     string
+	semester string
+	ctwPairs []model.CTWPair
+}
 
 func (m *MockFreeClassRoomBiz) SaveFreeClassRoomInfo(ctx context.Context, year, semester string, cwtPairs []model.CTWPair) error {
-	file, err := os.Create("data.json")
-	if err != nil {
-		return err
-	}
-	encoder := json.NewEncoder(file)
-	//encoder.SetIndent("", "  ") // 设置缩进使得JSON更具可读性
-	err = encoder.Encode(&cwtPairs)
-	if err != nil {
-		return err
-	}
+	m.year = year
+	m.semester = semester
+	m.ctwPairs = append([]model.CTWPair(nil), cwtPairs...)
 	return nil
 }
 
@@ -40,29 +36,26 @@ func TestUploadSelection(t *testing.T) {
 			"2024级": {
 				"class_time_idx": 7,
 				"class_where_idx": 8
-			},
-			"2023级" : {
-				"class_time_idx": 7,
-				"class_where_idx": 8
-			},
-			"2022级" : {
-				"class_time_idx": 7,
-				"class_where_idx": 8
-			},
-			"2021级" : {
-				"class_time_idx": 7,
-				"class_where_idx": 8
-			},
-			"公共课" : {
-				"class_time_idx": 7,
-				"class_where_idx": 8
 			}
 		}
 	}`
 
-	excelFile, err := os.OpenFile("./2024-2025学年第1学期选课手册.xlsx", os.O_RDONLY, 0644)
+	excelFile := excelize.NewFile()
+	defer excelFile.Close()
+	const sheet = "2024级"
+	_, err := excelFile.NewSheet(sheet)
 	if err != nil {
-		t.Fatalf("Failed to create test Excel file: %v", err)
+		t.Fatalf("Failed to create worksheet: %v", err)
+	}
+	if err := excelFile.SetCellValue(sheet, "H2", "星期一第1-2节{1-2周}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := excelFile.SetCellValue(sheet, "I2", "N101"); err != nil {
+		t.Fatal(err)
+	}
+	excelBytes, err := excelFile.WriteToBuffer()
+	if err != nil {
+		t.Fatalf("Failed to create test Excel data: %v", err)
 	}
 
 	// 创建请求体（multipart/form-data）
@@ -81,8 +74,7 @@ func TestUploadSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create form file: %v", err)
 	}
-	_, err = io.Copy(filePart, excelFile)
-	if err != nil {
+	if _, err = filePart.Write(excelBytes.Bytes()); err != nil {
 		t.Fatalf("Failed to copy Excel file data: %v", err)
 	}
 
@@ -100,8 +92,9 @@ func TestUploadSelection(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	// 创建服务和处理器
+	saver := &MockFreeClassRoomBiz{}
 	selectionUploader := &SelectionUploader{
-		freeClassRoom: &MockFreeClassRoomBiz{},
+		freeClassRoom: saver,
 	}
 
 	// 调用 UploadSelection 方法
@@ -110,4 +103,7 @@ func TestUploadSelection(t *testing.T) {
 	t.Log(rr.Body.String())
 	// 检查响应状态
 	assert.Equal(t, http.StatusOK, rr.Code, "Expected status code 200")
+	assert.Equal(t, "2024", saver.year)
+	assert.Equal(t, "2", saver.semester)
+	assert.NotEmpty(t, saver.ctwPairs)
 }

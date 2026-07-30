@@ -1,15 +1,19 @@
 package lock
 
 import (
+	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestRedisLock(t *testing.T) {
+	server := miniredis.RunT(t)
 	cli := redis.NewClient(&redis.Options{
-		Addr: "localhost:16379",
+		Addr: server.Addr(),
 	})
+	t.Cleanup(func() { _ = cli.Close() })
 	builder := NewRedisLockBuilder(cli)
 	locker1 := builder.Build("test")
 	locker2 := builder.Build("test")
