@@ -117,9 +117,8 @@ func (c *CultivateStrategyBiz) GetToBeStudiedClass(ctx context.Context, stuId, s
 			go func(classes service.ToBeStudiedClasses) {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
-				if err := c.SaveClassesAndRelationsToDB(ctx, stuId, &resCopy); err != nil {
-					// TODO log
-					fmt.Printf("gouroutine save err: %+v\n", err)
+				if err := c.SaveClassesAndRelationsToDB(ctx, stuId, &classes); err != nil {
+					log.Context(ctx).Errorf("save crawled cultivate strategy: %v", err)
 				}
 			}(resCopy)
 
