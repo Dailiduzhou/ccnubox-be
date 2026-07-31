@@ -10,6 +10,8 @@ func TestIsAllowedOrigin(t *testing.T) {
 	}{
 		{name: "localhost", origin: "http://localhost:3000", want: true},
 		{name: "loopback", origin: "http://127.0.0.1:5173", want: true},
+		{name: "IPv4 loopback range", origin: "http://127.0.0.2:3000", want: true},
+		{name: "IPv6 loopback", origin: "http://[::1]:3000", want: true},
 		{name: "root domain", origin: "https://muxixyz.com", want: true},
 		{name: "subdomain", origin: "https://ccnubox.muxixyz.com", want: true},
 		{name: "lookalike suffix", origin: "https://evil-muxixyz.com", want: false},

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -22,7 +23,10 @@ func isAllowedOrigin(origin string) bool {
 	}
 
 	host := strings.ToLower(parsed.Hostname())
-	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return true
 	}
 
