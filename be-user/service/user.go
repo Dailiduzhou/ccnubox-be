@@ -59,7 +59,10 @@ func NewUserService(dao dao.UserDAO, cache cache.UserCache, cryptoClient *crypto
 func (s *userService) Delete(ctx context.Context, studentId string, password string) error {
 	user, err := s.dao.FindByStudentId(ctx, studentId)
 	if err != nil {
-		return USER_NOT_FOUND_ERROR(errorx.Errorf("service: find user for deletion failed, sid: %s, err: %w", studentId, err))
+		if errors.Is(err, dao.UserNotFound) {
+			return USER_NOT_FOUND_ERROR(errorx.Errorf("service: user not found for deletion, sid: %s, err: %w", studentId, err))
+		}
+		return DEFAULT_DAO_ERROR(errorx.Errorf("service: find user for deletion failed, sid: %s, err: %w", studentId, err))
 	}
 	storedPassword, err := s.cryptoClient.Decrypt(user.Password)
 	if err != nil {
@@ -68,11 +71,11 @@ func (s *userService) Delete(ctx context.Context, studentId string, password str
 	if subtle.ConstantTimeCompare([]byte(storedPassword), []byte(password)) != 1 {
 		return InCorrectPassword(errorx.New("service: delete user password mismatch"))
 	}
+	if err := s.cache.DeleteUserData(ctx, studentId); err != nil {
+		return DEFAULT_DAO_ERROR(errorx.Errorf("service: clear user credentials before deletion failed, sid: %s, err: %w", studentId, err))
+	}
 	if err := s.dao.Delete(ctx, studentId); err != nil {
 		return DEFAULT_DAO_ERROR(errorx.Errorf("service: delete user failed, sid: %s, err: %w", studentId, err))
-	}
-	if err := s.cache.DeleteUserData(ctx, studentId); err != nil {
-		s.l.WithContext(ctx).Warn("service: deleted user but failed to clear cache", logger.String("sid", studentId), logger.Error(err))
 	}
 	return nil
 }
