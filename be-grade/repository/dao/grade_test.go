@@ -6,15 +6,19 @@ import (
 )
 
 func TestGradeUpdateColumns(t *testing.T) {
+	baseWant := []string{
+		"kc_id", "kcmc", "xnm", "xqm", "xf", "kcxzmc", "kclbmc", "kcbj", "jd", "cj",
+	}
 	base := gradeUpdateColumns(false)
-	if slices.Contains(base, "regular_grade") {
-		t.Fatal("base grade update unexpectedly overwrites detail columns")
+	if !slices.Equal(base, baseWant) {
+		t.Fatalf("gradeUpdateColumns(false) = %v, want %v", base, baseWant)
 	}
 
+	detailWant := append(slices.Clone(baseWant),
+		"regular_grade_percent", "regular_grade", "final_grade_percent", "final_grade",
+	)
 	detail := gradeUpdateColumns(true)
-	for _, column := range []string{"regular_grade_percent", "regular_grade", "final_grade_percent", "final_grade"} {
-		if !slices.Contains(detail, column) {
-			t.Fatalf("detail grade update is missing %q", column)
-		}
+	if !slices.Equal(detail, detailWant) {
+		t.Fatalf("gradeUpdateColumns(true) = %v, want %v", detail, detailWant)
 	}
 }
