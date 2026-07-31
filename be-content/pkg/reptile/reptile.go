@@ -1,6 +1,7 @@
 package reptile
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,7 +73,11 @@ func (r *reptile) GetCalendarLink() ([]CalendarInfo, error) {
 	}
 
 	// 解析 HTML
-	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, maxHTMLSize))
+	body, err := readHTML(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +138,11 @@ func (r *reptile) FetchPDFOrImageLinksFromPage(url string) (string, []string, er
 	}
 
 	// 解析 HTML
-	doc, err := html.Parse(io.LimitReader(resp.Body, maxHTMLSize))
+	body, err := readHTML(resp.Body)
+	if err != nil {
+		return "", nil, err
+	}
+	doc, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
 		return "", nil, err
 	}
@@ -174,6 +183,17 @@ func (r *reptile) FetchPDFOrImageLinksFromPage(url string) (string, []string, er
 	// 开始遍历
 	traverse(doc)
 	return pdfLink, imageLinks, nil
+}
+
+func readHTML(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxHTMLSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read HTML response: %w", err)
+	}
+	if len(data) > maxHTMLSize {
+		return nil, fmt.Errorf("HTML response exceeds %d bytes", maxHTMLSize)
+	}
+	return data, nil
 }
 
 // findImages 查找所有 <img> 标签
