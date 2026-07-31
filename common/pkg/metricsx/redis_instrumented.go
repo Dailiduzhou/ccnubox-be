@@ -238,6 +238,17 @@ func (r *InstrumentedRedis) Pipeline() redis.Pipeliner {
 	}
 }
 
+func (r *InstrumentedRedis) Pipelined(
+	ctx context.Context,
+	fn func(redis.Pipeliner) error,
+) ([]redis.Cmder, error) {
+	pipeline := r.Pipeline()
+	if err := fn(pipeline); err != nil {
+		return nil, err
+	}
+	return pipeline.Exec(ctx)
+}
+
 // TxPipeline 在 Exec 时上报一次事务批处理的整体耗时和结果。
 func (r *InstrumentedRedis) TxPipeline() redis.Pipeliner {
 	return &instrumentedPipeliner{
@@ -245,6 +256,17 @@ func (r *InstrumentedRedis) TxPipeline() redis.Pipeliner {
 		redis:     r,
 		operation: "TXPIPELINE",
 	}
+}
+
+func (r *InstrumentedRedis) TxPipelined(
+	ctx context.Context,
+	fn func(redis.Pipeliner) error,
+) ([]redis.Cmder, error) {
+	pipeline := r.TxPipeline()
+	if err := fn(pipeline); err != nil {
+		return nil, err
+	}
+	return pipeline.Exec(ctx)
 }
 
 type instrumentedPipeliner struct {
