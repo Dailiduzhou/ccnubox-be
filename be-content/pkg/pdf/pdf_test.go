@@ -1,6 +1,7 @@
 package pdf
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -43,4 +44,25 @@ func TestGetBytesFromLink(t *testing.T) {
 			t.Fatal("GetBytesFromLink() accepted oversized response")
 		}
 	})
+
+	t.Run("unknown content length", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.(http.Flusher).Flush()
+			_, _ = io.CopyN(w, repeatingReader{}, maxDownloadSize+1)
+		}))
+		defer server.Close()
+
+		if _, err := GetBytesFromLink(server.URL); err == nil {
+			t.Fatal("GetBytesFromLink() accepted oversized chunked response")
+		}
+	})
+}
+
+type repeatingReader struct{}
+
+func (repeatingReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
 }
