@@ -179,7 +179,7 @@ func (h *UserHandler) RefreshToken(ctx *gin.Context) (web.Response, error) {
 // @Failure 500 {object} web.Response "注销失败或 token 清理失败，code=51401"
 // @Router /users/deactivate [post]
 func (h *UserHandler) DeleteAccount(ctx *gin.Context, req DeleteAccountReq, cla ijwt.UserClaims) (web.Response, error) {
-	_, err := h.userClient.DeleteUser(ctx, &userv1.DeleteUserReq{
+	check, err := h.userClient.CheckUser(ctx, &userv1.CheckUserReq{
 		StudentId: cla.StudentId,
 		Password:  req.Password,
 	})
@@ -189,10 +189,24 @@ func (h *UserHandler) DeleteAccount(ctx *gin.Context, req DeleteAccountReq, cla 
 	if err != nil {
 		return web.Response{}, errs.DEACTIVATE_ACCOUNT_ERROR(err)
 	}
+	if check == nil || !check.Success {
+		return web.Response{}, errs.USER_SID_OR_PASSWORD_ERROR(err)
+	}
 
 	err = h.ClearToken(ctx)
 	if err != nil {
 		return web.Response{}, errs.JWT_SYSTEM_ERROR(err)
+	}
+
+	_, err = h.userClient.DeleteUser(ctx, &userv1.DeleteUserReq{
+		StudentId: cla.StudentId,
+		Password:  req.Password,
+	})
+	if userv1.IsIncorrectPasswordError(err) {
+		return web.Response{}, errs.USER_SID_OR_PASSWORD_ERROR(err)
+	}
+	if err != nil {
+		return web.Response{}, errs.DEACTIVATE_ACCOUNT_ERROR(err)
 	}
 
 	return web.Response{
