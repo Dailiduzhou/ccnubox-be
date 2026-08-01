@@ -3,7 +3,6 @@ package service
 import (
 	"compress/gzip"
 	"encoding/json"
-	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,7 +12,9 @@ import (
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/be-grade/domain"
+	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
 
 const (
@@ -125,7 +126,7 @@ func Send(cookie, ksxq, jsxq string, pc proxy.Client) (*domain.GetRankByTermResp
 		reader = resp.Body
 	}
 
-	body, err := io.ReadAll(reader)
+	body, err := httpx.ReadLimited(reader, httpx.DefaultMaxBodyBytes)
 	if err != nil {
 		return nil, errorx.Errorf("crawler: read response body failed, err: %w", err)
 	}

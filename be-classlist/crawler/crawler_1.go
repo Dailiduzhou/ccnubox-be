@@ -3,7 +3,6 @@ package crawler
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz/model"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/valyala/fastjson"
 )
@@ -34,6 +34,7 @@ type Crawler struct {
 func NewClassCrawler(pg ProxyGetter, l logger.Logger) *Crawler {
 	newClient := func() interface{} {
 		return &http.Client{
+			Timeout: 40 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        10, // 既然使用sync.Pool管理对象，这个不宜过大
 				IdleConnTimeout:     90 * time.Second,
@@ -46,9 +47,6 @@ func NewClassCrawler(pg ProxyGetter, l logger.Logger) *Crawler {
 					}
 					return nil, nil
 				},
-			},
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return nil
 			},
 		}
 	}
@@ -115,7 +113,7 @@ func (c *Crawler) GetClassInfoForGraduateStudent(ctx context.Context, stuID, yea
 	defer resp.Body.Close()
 
 	// 读取 Body 到字节数组
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
 		return nil, nil, -1, err
@@ -180,7 +178,7 @@ func (c *Crawler) GetClassInfosForUndergraduate(ctx context.Context, stuID, year
 	defer resp.Body.Close()
 
 	// 读取 Body 到字节数组
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
 		return nil, nil, -1, err

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/asynccnu/ccnubox-be/common/pkg/crypto"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
 
 const (
@@ -97,7 +97,7 @@ func (c *Library) GetSeatAuthTokenFromLibrary(ctx context.Context) (string, erro
 	}
 	defer resp.Body.Close()
 
-	respBodyBytes, err := io.ReadAll(resp.Body)
+	respBodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return "", errorx.Errorf("library: read response reqBody failed:%v", err)
 	}
@@ -137,7 +137,7 @@ func (c *Library) CheckLibrarySeatToken(ctx context.Context, token string) (bool
 	}
 
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return false, err
 	}
@@ -172,7 +172,7 @@ func (c *Library) GetDiscussionAuthTokenFromLibrary(ctx context.Context) (string
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return "", err
 	}
@@ -205,7 +205,7 @@ func (c *Library) CheckLibraryDiscussionToken(ctx context.Context, token string)
 		return false, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return false, err
 	}

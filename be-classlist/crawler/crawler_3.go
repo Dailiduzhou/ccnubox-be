@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -17,6 +16,7 @@ import (
 	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/tool"
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/valyala/fastjson"
 )
@@ -96,7 +96,7 @@ func (c *Crawler3) GetClassInfosForUndergraduate(ctx context.Context, stuID, yea
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("read body failed:%v", err)
 		return nil, nil, -1, err
@@ -352,7 +352,7 @@ func (c *Crawler3) GetClassInfoForGraduateStudent(ctx context.Context, stuID, ye
 	defer resp.Body.Close()
 
 	// 读取 Body 到字节数组
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
 		return nil, nil, -1, err

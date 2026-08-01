@@ -2,13 +2,13 @@ package crawler
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 	"github.com/asynccnu/ccnubox-be/common/tool"
 )
 
@@ -72,7 +72,7 @@ func (c *Passport) getParamsFromHtml(ctx context.Context) (*accountRequestParams
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return params, errorx.Errorf("read login html failed: %w", err)
 	}
@@ -150,7 +150,7 @@ func (c *Passport) loginCCNUPassport(
 	}
 	defer resp.Body.Close()
 
-	res, err := io.ReadAll(resp.Body)
+	res, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return errorx.Errorf("read login response failed: %w", err)
 	}

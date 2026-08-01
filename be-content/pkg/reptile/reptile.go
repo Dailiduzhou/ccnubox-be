@@ -2,6 +2,7 @@ package reptile
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 	"github.com/dubbogo/net/html"
 )
 
@@ -186,12 +188,12 @@ func (r *reptile) FetchPDFOrImageLinksFromPage(url string) (string, []string, er
 }
 
 func readHTML(body io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(body, maxHTMLSize+1))
+	data, err := httpx.ReadLimited(body, maxHTMLSize)
 	if err != nil {
+		if errors.Is(err, httpx.ErrBodyTooLarge) {
+			return nil, fmt.Errorf("HTML response exceeds %d bytes", maxHTMLSize)
+		}
 		return nil, fmt.Errorf("read HTML response: %w", err)
-	}
-	if len(data) > maxHTMLSize {
-		return nil, fmt.Errorf("HTML response exceeds %d bytes", maxHTMLSize)
 	}
 	return data, nil
 }

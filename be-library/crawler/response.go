@@ -2,19 +2,16 @@ package crawler
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
 
 func readSuccessfulResponse(resp *http.Response) ([]byte, error) {
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return nil, errorx.Errorf("read upstream response: %w", err)
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, errorx.Errorf("upstream returned HTTP %d", resp.StatusCode)
 	}
 
 	var envelope Response

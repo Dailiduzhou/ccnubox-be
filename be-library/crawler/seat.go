@@ -110,7 +110,10 @@ func (c *Crawler) doSeatRequestWithToken(ctx context.Context, method, url, token
 
 // GetSeatInfos 获取不定个给定的房间的座位信息
 func (c *Crawler) GetSeatInfos(ctx context.Context, token string, roomIDs []string) (map[string][]*Seat, error) {
+	const maxConcurrentRooms = 8
+
 	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, maxConcurrentRooms)
 	results := make(map[string][]*Seat, len(roomIDs))
 	var mutex sync.Mutex
 	var firstErr error
@@ -121,6 +124,17 @@ func (c *Crawler) GetSeatInfos(ctx context.Context, token string, roomIDs []stri
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				mutex.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mutex.Unlock()
+				return
+			}
 			seats, err := c.getSeatInfos(ctx, token, roomID, date, reqData)
 			mutex.Lock()
 			defer mutex.Unlock()
