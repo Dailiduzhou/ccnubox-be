@@ -9,13 +9,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
 
 const (
@@ -48,8 +48,12 @@ func (c *PostGraduate) FetchPublicKey(ctx context.Context) (*rsa.PublicKey, erro
 	}
 	defer resp.Body.Close()
 
+	body, err := httpx.ReadResponse(resp)
+	if err != nil {
+		return nil, errorx.Errorf("postgraduate: read public key response failed: %w", err)
+	}
 	var data rsaPublicKeyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.Unmarshal(body, &data); err != nil {
 		return nil, errorx.Errorf("postgraduate: decode public key response failed: %w", err)
 	}
 
@@ -101,7 +105,7 @@ func (c *PostGraduate) LoginPostgraduateSystem(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return errorx.Errorf("postgraduate: read login response failed: %w", err)
 	}

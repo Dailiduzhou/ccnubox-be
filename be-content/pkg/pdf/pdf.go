@@ -2,13 +2,14 @@ package pdf
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 	"github.com/jung-kurt/gofpdf"
 )
 
@@ -100,12 +101,12 @@ func GetBytesFromLink(url string) ([]byte, error) {
 		return nil, fmt.Errorf("download %s exceeds %d bytes", url, maxDownloadSize)
 	}
 
-	imgBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
+	imgBytes, err := httpx.ReadResponse(resp, httpx.WithMaxBodyBytes(maxDownloadSize))
 	if err != nil {
+		if errors.Is(err, httpx.ErrBodyTooLarge) {
+			return nil, fmt.Errorf("download %s exceeds %d bytes", url, maxDownloadSize)
+		}
 		return nil, err
-	}
-	if len(imgBytes) > maxDownloadSize {
-		return nil, fmt.Errorf("download %s exceeds %d bytes", url, maxDownloadSize)
 	}
 
 	return imgBytes, nil

@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
 
 type Graduate struct {
@@ -108,7 +108,7 @@ func (g *Graduate) GetGraduateGrades(ctx context.Context, cookie string, xnm, xq
 		return nil, errorx.Errorf("crawler: graduate system status error, code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return nil, errorx.Errorf("crawler: read graduate response failed, err: %w", err)
 	}

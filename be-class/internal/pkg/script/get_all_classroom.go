@@ -3,13 +3,14 @@ package script
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
 
 const (
@@ -92,10 +93,10 @@ func getAllClassRooms(cli *http.Client, year, semester, cookie string) ([]string
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		body, _ := httpx.ReadLimited(resp.Body, 1024)
 		return nil, fmt.Errorf("classroom upstream returned HTTP %d: %.300s", resp.StatusCode, strings.Join(strings.Fields(string(body)), " "))
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return nil, err
 	}

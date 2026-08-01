@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 
 	"github.com/asynccnu/ccnubox-be/be-class/internal/lock"
 	clog "github.com/asynccnu/ccnubox-be/be-class/internal/log"
@@ -628,12 +628,12 @@ func (f *FreeClassroomBiz) sendReqFindFreeClassRoom(ctx context.Context, preYear
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		body, _ := httpx.ReadLimited(resp.Body, 1024)
 		bodySummary := strings.Join(strings.Fields(string(body)), " ")
 		return nil, fmt.Errorf("free classroom upstream returned HTTP %d: %.300s", resp.StatusCode, bodySummary)
 	}
 	// 读取 Body 到字节数组
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := httpx.ReadResponse(resp)
 
 	if err != nil {
 		clog.LogPrinter.Warnf("failed to read response body: %v", err)

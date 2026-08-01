@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/asynccnu/ccnubox-be/be-proxy/conf"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/robfig/cron/v3"
 )
@@ -98,7 +98,7 @@ func (s *HttpProxy) fetchIp() {
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := httpx.ReadResponse(resp, httpx.WithMaxBodyBytes(64<<10))
 		_ = resp.Body.Close() // 及时关闭资源，防止 for 循环内泄露
 
 		if err != nil {

@@ -5,13 +5,14 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/asynccnu/ccnubox-be/be-elecprice/domain"
-	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
-	"io"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/asynccnu/ccnubox-be/be-elecprice/domain"
+	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
 
 // 通用 HTTP 请求函数
@@ -40,7 +41,7 @@ func sendRequest(pc proxy.Client, url string) (string, error) {
 		return "", fmt.Errorf("服务器返回错误状态码: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp, httpx.WithMaxBodyBytes(1<<20))
 	if err != nil {
 		return "", fmt.Errorf("读取响应体失败: %w", err)
 	}

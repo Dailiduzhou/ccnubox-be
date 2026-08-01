@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
 
 const (
@@ -97,7 +97,7 @@ func (c *UnderGrad) GetGrade(ctx context.Context, xnm, xqm int64, showCount int)
 		return nil, errorx.Errorf("crawler: undergrad system status error, code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return nil, errorx.Errorf("crawler: read undergrad body failed, err: %w", err)
 	}
@@ -153,7 +153,7 @@ func (c *UnderGrad) GetDetail(ctx context.Context, xs0101id string, jx0404id str
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		return Score{}, errorx.Errorf("crawler: read detail body failed, err: %w", err)
 	}

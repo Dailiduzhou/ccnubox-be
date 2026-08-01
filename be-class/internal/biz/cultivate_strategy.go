@@ -1,10 +1,10 @@
 package biz
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,6 +14,8 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/asynccnu/ccnubox-be/be-class/internal/model"
 	"github.com/asynccnu/ccnubox-be/be-class/internal/service"
+	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
+	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 	"github.com/go-kratos/kratos/v2/log"
 	"gorm.io/gorm"
 )
@@ -251,7 +253,11 @@ func (c *CultivateStrategyBiz) GetCultivateStrategyFromCCNU(ctx context.Context,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	res, err := extractUnstudiedClasses(resp.Body, stuId)
+	body, err := httpx.ReadResponse(resp)
+	if err != nil {
+		return service.ToBeStudiedClasses{}, err
+	}
+	res, err := extractUnstudiedClasses(bytes.NewReader(body), stuId)
 	if err != nil {
 		return service.ToBeStudiedClasses{}, err
 	}
