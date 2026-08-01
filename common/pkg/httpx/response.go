@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"slices"
@@ -94,6 +95,9 @@ func ReadResponse(resp *http.Response, options ...ResponseOption) ([]byte, error
 func ReadLimited(reader io.Reader, maxBytes int64) ([]byte, error) {
 	if reader == nil || maxBytes <= 0 {
 		return nil, fmt.Errorf("%w: reader and positive body limit are required", ErrInvalidResponse)
+	}
+	if maxBytes == math.MaxInt64 {
+		return nil, fmt.Errorf("%w: body limit is too large", ErrInvalidResponse)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))

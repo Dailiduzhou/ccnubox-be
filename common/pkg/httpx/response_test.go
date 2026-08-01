@@ -3,6 +3,7 @@ package httpx
 import (
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -44,6 +45,13 @@ func TestReadLimitedAcceptsExactLimit(t *testing.T) {
 	}
 	if string(got) != "1234" {
 		t.Fatalf("ReadLimited() = %q", got)
+	}
+}
+
+func TestReadLimitedRejectsMaxInt64Limit(t *testing.T) {
+	_, err := ReadLimited(strings.NewReader("data"), math.MaxInt64)
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("ReadLimited() error = %v, want %v", err, ErrInvalidResponse)
 	}
 }
 
