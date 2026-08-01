@@ -2,7 +2,8 @@ package crawler
 
 import (
 	"context"
-	"io/ioutil"
+	"errors"
+	"os"
 	"testing"
 )
 
@@ -11,14 +12,17 @@ func Test_extractCourseInfo(t *testing.T) {
 	path := "./test.html"
 
 	// 读取文件内容
-	content, err := ioutil.ReadFile(path)
+	content, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skip("test.html fixture is not available")
+		}
 		t.Fatalf("failed to read file: %v", err)
 	}
 
 	t.Logf("length: %v", len(content))
 
-	c := NewClassCrawler2(&MockProxyGetter{})
+	c := NewClassCrawler2(&MockProxyClient{})
 
 	classes, err := c.extractCourses(context.Background(), "2025", "1", []byte(string(content)))
 	if err != nil {
@@ -30,9 +34,9 @@ func Test_extractCourseInfo(t *testing.T) {
 }
 
 func Test_Crawler2(t *testing.T) {
-	c := NewClassCrawler2(&MockProxyGetter{})
-	test_cookie := "bzb_jsxsd=CD6739EC4A67BB85312FF0388BD82311"
-	a, b, _, err := c.GetClassInfosForUndergraduate(context.Background(), "2023214414", "2025", "1", test_cookie)
+	studentID, cookie := integrationCredentials(t, "CCNU_TEST_UNDERGRAD_COOKIE")
+	c := NewClassCrawler2(&MockProxyClient{})
+	a, b, _, err := c.GetClassInfosForUndergraduate(context.Background(), studentID, "2025", "1", cookie)
 	if err != nil {
 		t.Fatalf("failed to crawl: %v", err)
 	}

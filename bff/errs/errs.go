@@ -111,6 +111,7 @@ var (
 	LOGIN_BY_CCNU_ERROR        = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, LOGIN_BY_CCNU_ERROR_CODE, "华中师范大学账号登录失败!"))
 	LOGOUT_ERROR               = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, LOGOUT_ERROR_CODE, "登出失败!"))
 	REFRESH_TOKEN_ERROR        = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, REFRESH_TOKEN_ERROR_CODE, "刷新 Token 失败!"))
+	DEACTIVATE_ACCOUNT_ERROR   = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, DEACTIVATE_ACCOUNT_ERROR_CODE, "注销账号失败!"))
 	USER_SID_OR_PASSWORD_ERROR = errorx.FormatErrorFunc(b_errorx.New(http.StatusUnauthorized, USER_SID_OR_PASSWORD_ERROR_CODE, "账号或者密码错误!"))
 	USER_SID_Or_PASSPORD_ERROR = USER_SID_OR_PASSWORD_ERROR // Deprecated: use USER_SID_OR_PASSWORD_ERROR.
 )

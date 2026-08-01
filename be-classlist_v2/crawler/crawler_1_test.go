@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,6 +19,16 @@ type MockProxyGetter struct{}
 
 func (m *MockProxyGetter) GetProxy(ctx context.Context) *url.URL {
 	return nil
+}
+
+func integrationCredentials(tb testing.TB, cookieEnv string) (string, string) {
+	tb.Helper()
+	studentID := os.Getenv("CCNU_TEST_STUDENT_ID")
+	cookie := os.Getenv(cookieEnv)
+	if studentID == "" || cookie == "" {
+		tb.Skip("set CCNU_TEST_STUDENT_ID and " + cookieEnv + " to run integration test")
+	}
+	return studentID, cookie
 }
 
 func newTestLogger(t testing.TB) logger.Logger {
@@ -41,10 +52,10 @@ func newTestLogger(t testing.TB) logger.Logger {
 }
 
 func TestCrawler_GetClassInfosForUndergraduate(t *testing.T) {
-	var cookie = "JSESSIONID=98355539BF868E9B0675D58EE1D794A8"
+	studentID, cookie := integrationCredentials(t, "CCNU_TEST_UNDERGRAD_COOKIE")
 	crawler := NewClassCrawler(&MockProxyGetter{}, newTestLogger(t))
 	start := time.Now()
-	infos, scs, _, err := crawler.GetClassInfosForUndergraduate(context.Background(), "testID", "2024", "2", cookie)
+	infos, scs, _, err := crawler.GetClassInfosForUndergraduate(context.Background(), studentID, "2024", "2", cookie)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,17 +71,17 @@ func TestCrawler_GetClassInfosForUndergraduate(t *testing.T) {
 }
 
 func BenchmarkCrawler_GetClassInfosForUndergraduate(b *testing.B) {
-	var cookie = "JSESSIONID=98355539BF868E9B0675D58EE1D794A8"
+	studentID, cookie := integrationCredentials(b, "CCNU_TEST_UNDERGRAD_COOKIE")
 	crawler := NewClassCrawler(&MockProxyGetter{}, newTestLogger(b))
 
 	ctx := context.Background()
 
 	// 通常第一次调用可以预热缓存等，不纳入统计
-	_, _, _, _ = crawler.GetClassInfosForUndergraduate(ctx, "testID", "2024", "2", cookie)
+	_, _, _, _ = crawler.GetClassInfosForUndergraduate(ctx, studentID, "2024", "2", cookie)
 
 	b.ResetTimer() // 重置计时器，排除预热时间
 	for i := 0; i < b.N; i++ {
-		_, _, _, err := crawler.GetClassInfosForUndergraduate(ctx, "testID", "2024", "2", cookie)
+		_, _, _, err := crawler.GetClassInfosForUndergraduate(ctx, studentID, "2024", "2", cookie)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -78,10 +89,10 @@ func BenchmarkCrawler_GetClassInfosForUndergraduate(b *testing.B) {
 }
 
 func TestCrawler_GetClassInfoForGraduateStudent(t *testing.T) {
-	var cookie = "JSESSIONID=9BF9BFAD7E543259A65596CA5DFF4E60;route=f06bbbc827e6ce0f67fc73327c06186a"
+	studentID, cookie := integrationCredentials(t, "CCNU_TEST_GRAD_COOKIE")
 	crawler := NewClassCrawler(&MockProxyGetter{}, newTestLogger(t))
 	start := time.Now()
-	infos, scs, _, err := crawler.GetClassInfoForGraduateStudent(context.Background(), "testID", "2024", "1", cookie)
+	infos, scs, _, err := crawler.GetClassInfoForGraduateStudent(context.Background(), studentID, "2024", "1", cookie)
 	if err != nil {
 		t.Fatal(err)
 	}

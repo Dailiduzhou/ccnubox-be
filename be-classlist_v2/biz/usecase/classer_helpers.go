@@ -321,13 +321,13 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 	logh := cluc.log.WithContext(ctx)
 	crawSuccess := true
 	defer func(currentTime time.Time) {
-		logh.Info(fmt.Sprintf("[%v %v %v] getCourseFromCrawler(success:%v) took %v", stuID, year, semester, crawSuccess, time.Since(currentTime)))
+		logh.Debug(fmt.Sprintf("getCourseFromCrawler(year:%v semester:%v success:%v) took %v", year, semester, crawSuccess, time.Since(currentTime)))
 	}(time.Now())
 
 	cookie, err := func() (string, error) {
 		cookieSuccess := true
 		defer func(currentTime time.Time) {
-			logh.Info(fmt.Sprintf("Get cookie (stu_id:%v,success:%v) from other service,cost %v", stuID, cookieSuccess, time.Since(currentTime)))
+			logh.Debug(fmt.Sprintf("Get cookie (success:%v) from other service,cost %v", cookieSuccess, time.Since(currentTime)))
 		}(time.Now())
 
 		cookie, err := cluc.ccnu.GetCookie(ctx, stuID)
@@ -362,7 +362,7 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 
 	ci, sc, sum, err := func() ([]*model.ClassInfoBO, []*model.StudentCourseBO, int, error) {
 		defer func(currentTime time.Time) {
-			logh.Info(fmt.Sprintf("craw class [%v,%v,%v] cost %v", stuID, year, semester, time.Since(currentTime)))
+			logh.Debug(fmt.Sprintf("craw class [year:%v semester:%v] cost %v", year, semester, time.Since(currentTime)))
 		}(time.Now())
 
 		classinfos, scs, sum, err := stu.GetClass(ctx, stuID, year, semester, cookie, cluc.crawler)

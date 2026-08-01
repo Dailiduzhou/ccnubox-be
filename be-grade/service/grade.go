@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
@@ -26,6 +27,8 @@ var (
 	ErrGetGrade = errorx.FormatErrorFunc(gradev1.ErrorGetGradeError("获取成绩失败"))
 )
 
+const defaultGradeRefreshInterval = 5 * time.Minute
+
 type GradeService interface {
 	GetGradeByTerm(ctx context.Context, req *domain.GetGradeByTermReq) ([]domain.Grade, error)
 	GetGradeScore(ctx context.Context, studentId string) ([]domain.TypeOfGradeScore, error)
@@ -42,6 +45,9 @@ type gradeService struct {
 	l               logger.Logger
 	sf              singleflight.Group
 	producer        producer.Producer
+	refreshMu       sync.Mutex
+	nextRefresh     map[string]time.Time
+	refreshInterval time.Duration
 }
 
 func NewGradeService(gradeDAO dao.GradeDAO, l logger.Logger, userClient userv1.UserServiceClient, classlistClient classlistv1.ClasserClient, proxyClient proxy.Client, producer producer.Producer) GradeService {
@@ -52,6 +58,8 @@ func NewGradeService(gradeDAO dao.GradeDAO, l logger.Logger, userClient userv1.U
 		proxyClient:     proxyClient,
 		producer:        producer,
 		classlistClient: classlistClient,
+		nextRefresh:     make(map[string]time.Time),
+		refreshInterval: defaultGradeRefreshInterval,
 	}
 
 	return g
@@ -91,9 +99,7 @@ func (s *gradeService) GetGradeByTerm(ctx context.Context, req *domain.GetGradeB
 		}
 
 		// 本地有数据，异步触发一次更新
-		go func() {
-			_, _ = s.fetchGradesWithSingleFlight(context.Background(), req.StudentID)
-		}()
+		s.refreshGradesInBackground(req.StudentID)
 
 		return modelConvDomainAndFilter(grades, req.Terms, req.Kcxzmcs), nil
 	}
@@ -112,9 +118,7 @@ func (s *gradeService) GetGradeScore(ctx context.Context, studentId string) ([]d
 		return aggregateGradeScore(fetchdata.final), nil
 	}
 
-	go func() {
-		_, _ = s.fetchGradesWithSingleFlight(context.Background(), studentId)
-	}()
+	s.refreshGradesInBackground(studentId)
 
 	return aggregateGradeScore(grades), nil
 }
@@ -244,8 +248,51 @@ func (s *gradeService) fetchGradesWithSingleFlight(ctx context.Context, studentI
 	if !ok && err == nil {
 		err = errorx.Errorf("service: fetch result type assertion failed")
 	}
+	if err == nil {
+		s.markGradeRefresh(studentId, time.Now())
+	}
 
 	return fetchGrades, err
+}
+
+func (s *gradeService) refreshGradesInBackground(studentID string) {
+	if !s.reserveGradeRefresh(studentID, time.Now()) {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+		if _, err := s.fetchGradesWithSingleFlight(ctx, studentID); err != nil {
+			s.l.WithContext(ctx).Warn("service: background grade refresh failed", logger.String("sid", studentID), logger.Error(err))
+		}
+	}()
+}
+
+func (s *gradeService) reserveGradeRefresh(studentID string, now time.Time) bool {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if next, ok := s.nextRefresh[studentID]; ok && now.Before(next) {
+		return false
+	}
+	s.markGradeRefreshLocked(studentID, now)
+	return true
+}
+
+func (s *gradeService) markGradeRefresh(studentID string, now time.Time) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	s.markGradeRefreshLocked(studentID, now)
+}
+
+func (s *gradeService) markGradeRefreshLocked(studentID string, now time.Time) {
+	if s.nextRefresh == nil {
+		s.nextRefresh = make(map[string]time.Time)
+	}
+	interval := s.refreshInterval
+	if interval <= 0 {
+		interval = defaultGradeRefreshInterval
+	}
+	s.nextRefresh[studentID] = now.Add(interval)
 }
 
 func (s *gradeService) newStudent(studentId, cookie string) (Student, error) {

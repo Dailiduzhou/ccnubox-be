@@ -9,6 +9,7 @@ service UserService {
   rpc GetCookie (GetCookieRequest) returns (GetCookieResponse);
   rpc GetLibrarySeatToken (GetLibraryTokenRequest) returns (GetLibraryTokenResponse);
   rpc GetLibraryDiscussionToken(GetLibraryTokenRequest) returns (GetLibraryTokenResponse);
+  rpc DeleteUser(DeleteUserReq) returns (DeleteUserResp);
 }
 
 message SaveUserReq {
@@ -43,3 +44,10 @@ message GetLibraryTokenRequest {
 message GetLibraryTokenResponse {
   string token = 1;
 }
+
+message DeleteUserReq {
+  string studentId = 1;
+  string password = 2;
+}
+
+message DeleteUserResp {}

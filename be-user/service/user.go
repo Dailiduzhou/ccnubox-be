@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,6 +34,7 @@ var (
 
 type UserService interface {
 	Save(ctx context.Context, studentId string, password string) error
+	Delete(ctx context.Context, studentId string, password string) error
 	GetCookie(ctx context.Context, studentId string, tpe ...string) (string, error)
 	GetLibrarySeatToken(ctx context.Context, studentId string) (string, error)
 	GetLibraryDiscussionToken(ctx context.Context, studentId string) (string, error)
@@ -54,30 +56,54 @@ func NewUserService(dao dao.UserDAO, cache cache.UserCache, cryptoClient *crypto
 	return &userService{dao: dao, cache: cache, cryptoClient: cryptoClient, ccnu: ccnu, l: l, pClient: pClient}
 }
 
-func (s *userService) Save(ctx context.Context, studentId string, password string) error {
-	// 密码加密
-	encryptedPwd, err := s.cryptoClient.Encrypt(password)
+func (s *userService) Delete(ctx context.Context, studentId string, password string) error {
+	user, err := s.dao.FindByStudentId(ctx, studentId)
 	if err != nil {
-		return ENCRYPT_ERROR(errorx.Errorf("service: encrypt failed, err: %w", err))
+		if errors.Is(err, dao.UserNotFound) {
+			return USER_NOT_FOUND_ERROR(errorx.Errorf("service: user not found for deletion, sid: %s, err: %w", studentId, err))
+		}
+		return DEFAULT_DAO_ERROR(errorx.Errorf("service: find user for deletion failed, sid: %s, err: %w", studentId, err))
 	}
+	storedPassword, err := s.cryptoClient.Decrypt(user.Password)
+	if err != nil {
+		return DECRYPT_ERROR(errorx.Errorf("service: decrypt password for deletion failed, sid: %s, err: %w", studentId, err))
+	}
+	if subtle.ConstantTimeCompare([]byte(storedPassword), []byte(password)) != 1 {
+		return InCorrectPassword(errorx.New("service: delete user password mismatch"))
+	}
+	if err := s.cache.DeleteUserData(ctx, studentId); err != nil {
+		return DEFAULT_DAO_ERROR(errorx.Errorf("service: clear user credentials before deletion failed, sid: %s, err: %w", studentId, err))
+	}
+	if err := s.dao.Delete(ctx, studentId); err != nil {
+		return DEFAULT_DAO_ERROR(errorx.Errorf("service: delete user failed, sid: %s, err: %w", studentId, err))
+	}
+	return nil
+}
 
+func (s *userService) Save(ctx context.Context, studentId string, password string) error {
 	user, err := s.dao.FindByStudentId(ctx, studentId)
 	switch {
 	case err == nil:
-		//如果需要更新则更新,否则直接返回
-		if user.Password != encryptedPwd {
-			user.Password = encryptedPwd
-		} else {
+		storedPassword, decryptErr := s.cryptoClient.Decrypt(user.Password)
+		if decryptErr != nil {
+			return DECRYPT_ERROR(errorx.Errorf("service: decrypt stored password failed, sid: %s, err: %w", studentId, decryptErr))
+		}
+		if storedPassword == password && !s.cryptoClient.NeedsMigration(user.Password) {
 			return nil
 		}
 	case errors.Is(err, dao.UserNotFound):
 		user = &model.User{
 			StudentId: studentId,
-			Password:  encryptedPwd,
 		}
 	default:
 		return DEFAULT_DAO_ERROR(errorx.Errorf("service: find user failed, sid: %s, err: %w", studentId, err))
 	}
+
+	encryptedPwd, err := s.cryptoClient.Encrypt(password)
+	if err != nil {
+		return ENCRYPT_ERROR(errorx.Errorf("service: encrypt failed, err: %w", err))
+	}
+	user.Password = encryptedPwd
 
 	if err = s.dao.Save(ctx, user); err != nil {
 		return SAVE_USER_ERROR(errorx.Errorf("service: dao save failed, sid: %s, err: %w", studentId, err))

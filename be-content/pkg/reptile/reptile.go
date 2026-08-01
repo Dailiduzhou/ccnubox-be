@@ -1,11 +1,15 @@
 package reptile
 
 import (
-	"github.com/PuerkitoBio/goquery"
-	"github.com/dubbogo/net/html"
+	"bytes"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/dubbogo/net/html"
 )
 
 // 定义日历信息结构体
@@ -17,7 +21,10 @@ type CalendarInfo struct {
 }
 
 // 不是很成功的设计但是方便
-const BASEURL = "https://jwc.ccnu.edu.cn"
+const (
+	baseURL     = "https://jwc.ccnu.edu.cn"
+	maxHTMLSize = 4 << 20
+)
 
 // 定义爬虫接口
 type Reptile interface {
@@ -49,7 +56,6 @@ func (r *reptile) GetCalendarLink() ([]CalendarInfo, error) {
 	url := "https://jwc.ccnu.edu.cn/index/hdxl.htm"
 
 	// 创建 HTTP 请求，添加 User-Agent 头
-	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -62,9 +68,16 @@ func (r *reptile) GetCalendarLink() ([]CalendarInfo, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("calendar request returned status %s", resp.Status)
+	}
 
 	// 解析 HTML
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	body, err := readHTML(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -82,9 +95,9 @@ func (r *reptile) GetCalendarLink() ([]CalendarInfo, error) {
 		}
 		// 处理相对路径
 		if strings.HasPrefix(link, "../") {
-			link = BASEURL + link[2:]
+			link = baseURL + link[2:]
 		} else {
-			link = BASEURL + link
+			link = baseURL + link
 		}
 
 		// 提取学年
@@ -120,9 +133,16 @@ func (r *reptile) FetchPDFOrImageLinksFromPage(url string) (string, []string, er
 		return "", nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("calendar detail request returned status %s", resp.Status)
+	}
 
 	// 解析 HTML
-	doc, err := html.Parse(resp.Body)
+	body, err := readHTML(resp.Body)
+	if err != nil {
+		return "", nil, err
+	}
+	doc, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
 		return "", nil, err
 	}
@@ -139,7 +159,7 @@ func (r *reptile) FetchPDFOrImageLinksFromPage(url string) (string, []string, er
 			if n.Data == "a" {
 				for _, attr := range n.Attr {
 					if attr.Key == "href" && strings.HasSuffix(attr.Val, ".pdf") {
-						pdfLink = BASEURL + attr.Val
+						pdfLink = baseURL + attr.Val
 					}
 				}
 			}
@@ -165,12 +185,23 @@ func (r *reptile) FetchPDFOrImageLinksFromPage(url string) (string, []string, er
 	return pdfLink, imageLinks, nil
 }
 
+func readHTML(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxHTMLSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read HTML response: %w", err)
+	}
+	if len(data) > maxHTMLSize {
+		return nil, fmt.Errorf("HTML response exceeds %d bytes", maxHTMLSize)
+	}
+	return data, nil
+}
+
 // findImages 查找所有 <img> 标签
 func findImages(n *html.Node, imageLinks *[]string) {
 	if n.Type == html.ElementNode && n.Data == "img" {
 		for _, attr := range n.Attr {
 			if attr.Key == "src" {
-				*imageLinks = append(*imageLinks, BASEURL+attr.Val)
+				*imageLinks = append(*imageLinks, baseURL+attr.Val)
 			}
 		}
 	}

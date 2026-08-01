@@ -1,18 +1,20 @@
 package timedTask
 
 import (
-	"github.com/robfig/cron/v3"
 	"testing"
-	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
-func TestStartTask(t *testing.T) {
+func TestAddTask(t *testing.T) {
 	taskManager := &Task{c: cron.New()}
-	err := taskManager.AddTask("* * * * *", func() {
-		t.Log("task is executed")
-	})
-	if err != nil {
-		t.Error(err)
+	if err := taskManager.AddTask("* * * * *", func() {}); err != nil {
+		t.Fatal(err)
 	}
-	time.Sleep(5 * time.Minute)
+	if got := len(taskManager.c.Entries()); got != 1 {
+		t.Fatalf("registered entries = %d, want 1", got)
+	}
+	if err := taskManager.AddTask("invalid", func() {}); err == nil {
+		t.Fatal("AddTask() accepted invalid cron expression")
+	}
 }

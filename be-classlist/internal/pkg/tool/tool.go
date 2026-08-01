@@ -96,12 +96,14 @@ func FormatWeeks(weeks []int) string {
 	return result.String()
 }
 func CheckIfThisYear(xnm, xqm string) bool {
+	return checkIfThisYearAt(xnm, xqm, time.Now())
+}
+
+func checkIfThisYearAt(xnm, xqm string, now time.Time) bool {
 	y, _ := strconv.Atoi(xnm)
 	s, _ := strconv.Atoi(xqm)
-	currentYear := time.Now().Year()
-	currentMonth := time.Now().Month()
-	//currentYear := 2023
-	//currentMonth := 10
+	currentYear := now.Year()
+	currentMonth := now.Month()
 	if currentMonth >= 9 {
 		return (y == currentYear) && (s == 1)
 	}

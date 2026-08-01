@@ -27,6 +27,12 @@ func (s *UserServiceServer) SaveUser(ctx context.Context,
 	return &userv1.SaveUserResp{}, err
 }
 
+func (s *UserServiceServer) DeleteUser(ctx context.Context,
+	request *userv1.DeleteUserReq) (*userv1.DeleteUserResp, error) {
+	err := s.svc.Delete(ctx, request.GetStudentId(), request.GetPassword())
+	return &userv1.DeleteUserResp{}, err
+}
+
 func (s *UserServiceServer) GetCookie(ctx context.Context, request *userv1.GetCookieRequest) (*userv1.GetCookieResponse, error) {
 	var (
 		u   string

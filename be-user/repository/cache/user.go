@@ -19,6 +19,7 @@ type UserCache interface {
 	SetCookie(ctx context.Context, sid string, cookie string) error
 	GetLibraryToken(ctx context.Context, sid string, serviceType string) (string, error)
 	SetLibraryToken(ctx context.Context, sid string, cookie string, serviceType string) error
+	DeleteUserData(ctx context.Context, sid string) error
 }
 
 type RedisUserCache struct {
@@ -73,6 +74,18 @@ func (cache *RedisUserCache) SetLibraryToken(ctx context.Context, sid string, co
 	err := cache.cmd.Set(ctx, key, cookie, 5*time.Minute).Err()
 	if err != nil {
 		return errorx.Errorf("cache: redis set library cookie failed, key: %s, err: %w", key, err)
+	}
+	return nil
+}
+
+func (cache *RedisUserCache) DeleteUserData(ctx context.Context, sid string) error {
+	keys := []string{
+		cache.key(sid),
+		cache.libraryKey(sid, "LIBRARY_SEAT"),
+		cache.libraryKey(sid, "LIBRARY_DISCUSSION"),
+	}
+	if err := cache.cmd.Del(ctx, keys...).Err(); err != nil {
+		return errorx.Errorf("cache: delete user data failed, sid: %s, err: %w", sid, err)
 	}
 	return nil
 }

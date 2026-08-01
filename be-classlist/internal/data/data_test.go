@@ -1,90 +1,61 @@
 package data
 
 import (
-	"fmt"
-	"github.com/stretchr/testify/assert"
+	"os"
+	"strings"
 	"testing"
 )
 
-func TestKafkaProducerBuilder_Build(t *testing.T) {
-	type fields struct {
-		brokers []string
+func TestKafkaConfigAuthentication(t *testing.T) {
+	t.Run("anonymous", func(t *testing.T) {
+		if initProducerConfig("", "").Net.SASL.Enable {
+			t.Fatal("producer enabled SASL without credentials")
+		}
+		if initConsumerConfig("", "").Net.SASL.Enable {
+			t.Fatal("consumer enabled SASL without credentials")
+		}
+	})
+
+	t.Run("credentials", func(t *testing.T) {
+		if !initProducerConfig("user", "password").Net.SASL.Enable {
+			t.Fatal("producer did not enable SASL with credentials")
+		}
+		if !initConsumerConfig("user", "password").Net.SASL.Enable {
+			t.Fatal("consumer did not enable SASL with credentials")
+		}
+	})
+}
+
+func TestKafkaBuildersRejectEmptyBrokers(t *testing.T) {
+	if _, err := (KafkaProducerBuilder{}).Build(); err == nil {
+		t.Fatal("producer accepted empty broker list")
 	}
-	tests := []struct {
-		name    string
-		fields  fields
-		wantErr assert.ErrorAssertionFunc
-	}{
-		{
-			name:    "len(brokers) is 0",
-			fields:  fields{brokers: []string{}},
-			wantErr: assert.Error,
-		},
-		{
-			name:    "brokers is not right",
-			fields:  fields{brokers: []string{"localhost:9194"}},
-			wantErr: assert.Error,
-		},
-		{
-			name:    "brokers is right",
-			fields:  fields{brokers: []string{"localhost:9094"}},
-			wantErr: assert.NoError,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pb := KafkaProducerBuilder{
-				brokers: tt.fields.brokers,
-			}
-			_, err := pb.Build()
-			if !tt.wantErr(t, err, fmt.Sprintf("Build()")) {
-				return
-			}
-		})
+	if _, err := (KafkaConsumerBuilder{}).Build("test"); err == nil {
+		t.Fatal("consumer accepted empty broker list")
 	}
 }
 
-func TestKafkaConsumerBuilder_Build(t *testing.T) {
-	type fields struct {
-		brokers []string
+func TestKafkaBuildersIntegration(t *testing.T) {
+	if os.Getenv("RUN_KAFKA_INTEGRATION_TESTS") != "1" {
+		t.Skip("set RUN_KAFKA_INTEGRATION_TESTS=1 to run Kafka integration test")
 	}
-	type args struct {
-		groupID string
+	brokers := strings.Split(os.Getenv("KAFKA_TEST_BROKERS"), ",")
+	username := os.Getenv("KAFKA_TEST_USERNAME")
+	password := os.Getenv("KAFKA_TEST_PASSWORD")
+
+	producer, err := (KafkaProducerBuilder{
+		brokers: brokers, username: username, password: password,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
 	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantErr assert.ErrorAssertionFunc
-	}{
-		{
-			name:    "len(brokers) is 0",
-			fields:  fields{brokers: []string{}},
-			args:    args{groupID: "test"},
-			wantErr: assert.Error,
-		},
-		{
-			name:    "brokers is not right",
-			fields:  fields{brokers: []string{"localhost:9194"}},
-			args:    args{groupID: "test"},
-			wantErr: assert.Error,
-		},
-		{
-			name:    "brokers is right",
-			fields:  fields{brokers: []string{"localhost:9094"}},
-			args:    args{groupID: "test"},
-			wantErr: assert.NoError,
-		},
+	defer producer.Close()
+
+	consumer, err := (KafkaConsumerBuilder{
+		brokers: brokers, username: username, password: password,
+	}).Build("ccnubox-test")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cb := KafkaConsumerBuilder{
-				brokers: tt.fields.brokers,
-			}
-			_, err := cb.Build(tt.args.groupID)
-			if !tt.wantErr(t, err, fmt.Sprintf("Build(%v)", tt.args.groupID)) {
-				return
-			}
-		})
-	}
+	defer consumer.Close()
 }

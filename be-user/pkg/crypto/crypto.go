@@ -7,7 +7,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"strings"
 )
+
+const currentCiphertextPrefix = "gcm:v1:"
 
 type Crypto struct {
 	key []byte // 用于加密解密的密钥
@@ -29,21 +32,36 @@ func (c *Crypto) Encrypt(plaintext string) (string, error) {
 		return "", err
 	}
 
-	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
 		return "", err
 	}
 
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], []byte(plaintext))
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
 
-	// 返回 Base64 编码的加密结果
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
+	ciphertext := aead.Seal(nonce, nonce, []byte(plaintext), nil)
+
+	return currentCiphertextPrefix + base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
 // Decrypt 解密 Base64 编码的密文并返回明文
 func (c *Crypto) Decrypt(encodedCiphertext string) (string, error) {
+	if strings.HasPrefix(encodedCiphertext, currentCiphertextPrefix) {
+		return c.decryptGCM(strings.TrimPrefix(encodedCiphertext, currentCiphertextPrefix))
+	}
+
+	// 兼容历史 AES-CFB 密文，用户下次保存密码时会迁移到 GCM。
+	return c.decryptLegacyCFB(encodedCiphertext)
+}
+
+func (c *Crypto) NeedsMigration(encodedCiphertext string) bool {
+	return !strings.HasPrefix(encodedCiphertext, currentCiphertextPrefix)
+}
+
+func (c *Crypto) decryptGCM(encodedCiphertext string) (string, error) {
 	ciphertext, err := base64.StdEncoding.DecodeString(encodedCiphertext)
 	if err != nil {
 		return "", err
@@ -54,13 +72,37 @@ func (c *Crypto) Decrypt(encodedCiphertext string) (string, error) {
 		return "", err
 	}
 
-	if len(ciphertext) < aes.BlockSize {
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(ciphertext) < aead.NonceSize() {
 		return "", errors.New("密文长度不足")
 	}
 
+	nonce := ciphertext[:aead.NonceSize()]
+	plaintext, err := aead.Open(nil, nonce, ciphertext[aead.NonceSize():], nil)
+	if err != nil {
+		return "", errors.New("密文认证失败")
+	}
+	return string(plaintext), nil
+}
+
+func (c *Crypto) decryptLegacyCFB(encodedCiphertext string) (string, error) {
+	ciphertext, err := base64.StdEncoding.DecodeString(encodedCiphertext)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(c.key)
+	if err != nil {
+		return "", err
+	}
+	if len(ciphertext) < aes.BlockSize {
+		return "", errors.New("密文长度不足")
+	}
 	iv := ciphertext[:aes.BlockSize]
 	ciphertext = ciphertext[aes.BlockSize:]
-
+	//lint:ignore SA1019 compatibility is required until all stored CFB ciphertexts are migrated
 	stream := cipher.NewCFBDecrypter(block, iv)
 	stream.XORKeyStream(ciphertext, ciphertext)
 

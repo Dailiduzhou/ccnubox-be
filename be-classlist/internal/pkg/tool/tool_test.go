@@ -145,7 +145,7 @@ func TestParseWeeks(t *testing.T) {
 		},
 		{
 			name: "test10",
-			args: args{weeks: 32767}, // 101011
+			args: args{weeks: 21632}, // 第 8、11、13、15 位
 			want: []int{8, 11, 13, 15},
 		},
 	}
@@ -158,28 +158,28 @@ func TestParseWeeks(t *testing.T) {
 	}
 }
 
-func TestCheckIfThisWeek(t *testing.T) {
+func TestCheckIfThisYearAt(t *testing.T) {
 	type args struct {
 		xnm string
 		xqm string
 	}
 	tests := []struct {
 		name string
+		now  time.Time
 		args args
 		want bool
 	}{
-		{"test1", args{"2023", "3"}, false},
-		{"test2", args{"2023", "1"}, true},
-		{"test3", args{"2024", "1"}, false},
-		{"test4", args{"2024", "2"}, false},
-		{"test5", args{"2026", "1"}, false},
-		{"test6", args{"2026", "2"}, false},
-		{"test7", args{"2026", "3"}, false},
+		{"autumn current", time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC), args{"2023", "1"}, true},
+		{"autumn wrong semester", time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC), args{"2023", "3"}, false},
+		{"january", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), args{"2023", "1"}, true},
+		{"spring", time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC), args{"2023", "2"}, true},
+		{"summer", time.Date(2024, 7, 1, 0, 0, 0, 0, time.UTC), args{"2023", "3"}, true},
+		{"future year", time.Date(2024, 7, 1, 0, 0, 0, 0, time.UTC), args{"2026", "3"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := CheckIfThisYear(tt.args.xnm, tt.args.xqm); got != tt.want {
-				t.Errorf("CheckIfThisYear() = %v, want %v", got, tt.want)
+			if got := checkIfThisYearAt(tt.args.xnm, tt.args.xqm, tt.now); got != tt.want {
+				t.Errorf("checkIfThisYearAt() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -200,6 +200,7 @@ func TestRandomBool(t *testing.T) {
 }
 
 func TestFormatTimeInUTC(t *testing.T) {
+	shanghai := time.FixedZone("Asia/Shanghai", 8*60*60)
 	// 定义测试用例
 	tests := []struct {
 		input    time.Time
@@ -207,12 +208,12 @@ func TestFormatTimeInUTC(t *testing.T) {
 	}{
 		{
 			// 测试当前时间
-			input:    time.Date(2025, 2, 21, 10, 30, 0, 123456000, time.Local),
+			input:    time.Date(2025, 2, 21, 10, 30, 0, 123456000, shanghai),
 			expected: "2025-02-21T02:30:00.123456",
 		},
 		{
 			// 测试没有时间差的时间
-			input:    time.Date(2025, 2, 21, 10, 30, 0, 0, time.Local),
+			input:    time.Date(2025, 2, 21, 10, 30, 0, 0, shanghai),
 			expected: "2025-02-21T02:30:00.000000",
 		},
 		{

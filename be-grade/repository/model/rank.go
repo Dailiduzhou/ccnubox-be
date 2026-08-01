@@ -3,7 +3,7 @@ package model
 import "time"
 
 type Rank struct {
-	Id        int64  `json:"id;primary_key;auto_increment"`
+	Id        int64  `gorm:"primaryKey;autoIncrement" json:"id"`
 	StudentId string `gorm:"column:student_id;type:varchar(100);not null;index:idx_student_id"`
 	XnmBegin  int64  `gorm:"index"`
 	XqmBegin  int64  `gorm:"index"`

@@ -26,6 +26,8 @@ var (
 	SAVE_CONFIG_ERROR = errorx.FormatErrorFunc(elecpricev1.ErrorSaveConfigError("保存配置失败"))
 )
 
+const roomCacheWorkers = 16
+
 type ElecpriceService interface {
 	SetStandard(ctx context.Context, r *domain.SetStandardRequest) error
 	GetStandardList(ctx context.Context, r *domain.GetStandardListRequest) (*domain.GetStandardListResponse, error)
@@ -239,6 +241,7 @@ func (s *elecpriceService) GetRoomInfo(ctx context.Context, archiID string, floo
 		ctxTm, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		g, ctxEg := errgroup.WithContext(ctxTm)
+		g.SetLimit(roomCacheWorkers)
 		for _, detail := range resp.Rooms {
 			detail_ := detail
 			g.Go(func() error {
