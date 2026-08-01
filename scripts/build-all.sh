@@ -30,9 +30,6 @@ for d in "${ds[@]}"; do
 
   # shellcheck disable=SC2046
   dockerfile="./$d/Dockerfile"
-  if [[ "$d" == "be-classlist" ]]; then
-    dockerfile="./be-classlist_v2/Dockerfile"
-  fi
 
   docker build -t "$d:v1" -f "$dockerfile" .
 

@@ -32,7 +32,6 @@ ccnubox-be/
 ├── be-ccnu/              # CCNU 一站式登录
 ├── be-class/             # 课程服务
 ├── be-classlist/         # 课表服务
-├── be-classlist_v2/      # 课表服务 v2
 ├── be-counter/           # 核心用户判断
 ├── be-elecprice/         # 电费服务
 ├── be-feed/              # 消息推送服务

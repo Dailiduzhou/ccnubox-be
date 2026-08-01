@@ -4,7 +4,6 @@ use (
 	be-ccnu
 	be-class
 	be-classlist
-	be-classlist_v2
 	be-content
 	be-counter
 	be-elecprice

@@ -5,12 +5,12 @@ on:
     branches:
       - main
     paths:
-      - 'be-classlist_v2/**'
+      - 'be-classlist/**'
       - 'common/**'
       - '.github/workflows/deploy-be-classlist.yaml'
 env:
   SERVICE_NAME: be-classlist  # 👈 这里设置的是全局环境变量
-  SERVICE_SOURCE: be-classlist_v2
+  SERVICE_SOURCE: be-classlist
   SERVICE_VERSION: BE_CLASSLIST  # 👈 这里设置的是 Docker Compose 文件中使用的环境变量名称
 
 
