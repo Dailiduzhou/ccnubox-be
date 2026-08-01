@@ -8,24 +8,24 @@ RUN go env -w GOPROXY=https://goproxy.cn,direct
 
 RUN go mod tidy
 
-RUN go build -o ./bin/be-classlist ./cmd/classlist
+RUN go build -o ./bin/be-classlist .
 
 FROM debian:stable-slim
 
 ENV TZ=Asia/Shanghai
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-		ca-certificates  \
-        netbase \
-        && rm -rf /var/lib/apt/lists/ \
-        && apt-get autoremove -y && apt-get autoclean -y
+		ca-certificates \
+		netbase \
+		&& rm -rf /var/lib/apt/lists/ \
+		&& apt-get autoremove -y && apt-get autoclean -y
 
 COPY --from=builder /src/be-classlist/bin /app
 
 WORKDIR /app
 
-EXPOSE 19084
+EXPOSE 20002
+
 VOLUME /data/conf
 
-## 注意，这里的“classlist”是main.go所在的目录名（猜的）
 CMD ["./be-classlist", "--config", "/data/conf/config.yaml"]
