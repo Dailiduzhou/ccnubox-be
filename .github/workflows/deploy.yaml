@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'be-ccnu/**'
-      - 'be-class_v2/**'
+      - 'be-class/**'
       - 'be-classlist/**'
       - 'be-content/**'
       - 'be-counter/**'
@@ -53,7 +53,7 @@ jobs:
 
           all_services=(
             be-ccnu
-            be-class_v2
+            be-class
             be-classlist
             be-content
             be-counter

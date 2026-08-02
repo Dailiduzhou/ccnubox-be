@@ -39,13 +39,9 @@ bin/
 *.swp
 *.env
 
-# deploy 
-/deploy/
-
 *.xlsx
 test.*
 
-deployment/docker/logs
 /volume/
 test.sh
 test.yaml

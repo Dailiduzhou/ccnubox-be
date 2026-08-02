@@ -30,7 +30,7 @@ ccnubox-be/
 ├── common/               # 公共定义，protobuf 文件
 ├── be-content/           # 内容服务
 ├── be-ccnu/              # CCNU 一站式登录
-├── be-class_v2/          # 课程服务（统一架构版本）
+├── be-class/             # 课程服务（统一架构版本）
 ├── be-classlist/         # 课表服务
 ├── be-counter/           # 核心用户判断
 ├── be-elecprice/         # 电费服务
@@ -38,9 +38,7 @@ ccnubox-be/
 ├── be-grade/             # 成绩服务
 ├── be-user/              # 用户服务
 ├── be-proxy/             # IP 代理池
-├── be-library/           # 图书馆服务
-├── scripts/              # 工具脚本
-└── deploy/               # 部署配置
+└── be-library/           # 图书馆服务
 ```
 
 ## 服务说明
@@ -50,7 +48,7 @@ ccnubox-be/
 | bff | 8080 | BFF 层，聚合服务给前端 |
 | be-content | 19081 | 校历、部门、信息汇总、banner |
 | be-ccnu | 19082 | 一站式登录服务 |
-| be-class_v2 | 18000/20001 | 蹭课、空闲教室查询 |
+| be-class | 18000/20001 | 蹭课、空闲教室查询 |
 | be-classlist | 19084 | 课表管理 |
 | be-counter | 19085 | 核心用户判断 |
 | be-elecprice | 19087 | 电费查询 |
@@ -67,38 +65,9 @@ ccnubox-be/
 - Go 1.26+
 - Docker & Docker Compose
 
-### 启动服务
+### 部署与配置
 
-1. 复制基础架构配置
-
-```bash
-# 复制各服务的 infra 配置
-cp deploy/config-infra.yaml docker-config.yaml
-```
-
-2. 修改 `docker-config.yaml` 中的配置（数据库地址、密码等）
-
-3. 启动基础组件
-
-```bash
-docker compose -f deploy/docker-compose-infra.yaml up -d
-```
-
-4. 构建并启动所有服务
-
-```bash
-# 构建所有服务镜像
-./scripts/build-all.sh
-
-# 或构建单个服务
-./scripts/build-be-class_v2.sh
-```
-
-5. 查看服务状态
-
-```bash
-docker compose ps
-```
+生产环境由 GitHub Actions 构建和发布服务镜像，并在远程服务器上通过 Docker Compose 更新服务。运行时配置统一由 Nacos 管理；本地调试请参考各服务目录中的 README 和配置示例。
 
 ## 架构图
 
@@ -110,7 +79,7 @@ graph TD
 
     subgraph MidService ["中游服务"]
         be_content["be-content:19081"]
-        be_course["be-class_v2:20001"]
+        be_course["be-class:20001"]
         be_course_list["be-classlist:19084"]
         be_grade["be-grade:19089"]
         be_elecprice["be-elecprice:19087"]
@@ -199,14 +168,15 @@ log:
 1. 在根目录创建服务目录
 2. 编写 Dockerfile（参考现有服务）
 3. 添加 config-example.yaml 和 config-infra-example.yaml
-4. 在 deploy/ 目录添加 docker-compose 配置
-5. 更新本 README 的服务说明
+4. 将服务加入 GitHub Actions 的构建与部署矩阵
+5. 在 Nacos 中添加对应的运行时配置
+6. 更新本 README 的服务说明
 
 ### 本地调试
 
 ```bash
 # 进入服务目录
-cd be-class_v2
+cd be-class
 
 # 下载依赖
 go mod tidy
