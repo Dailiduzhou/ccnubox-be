@@ -1,28 +1,28 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: be-class
+  name: be-class-v2
   namespace: ccnube
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: be-class
+      app: be-class-v2
   template:
     metadata:
       labels:
-        app: be-class
+        app: be-class-v2
     spec:
       containers:
-        - name: be-class
-          image: be-class:v1
+        - name: be-class-v2
+          image: be-class_v2:v1
           imagePullPolicy: Always
           resources:
             limits:
               memory: "128Mi"
               cpu: "500m"
           ports:
-            - containerPort: 19083
+            - containerPort: 20001
             - containerPort: 18000
           volumeMounts:
             - name: config-volume
@@ -34,5 +34,7 @@ spec:
             items:
               - key: be-class.yaml
                 path: config.yaml
+              - key: config-infra.yaml
+                path: config-infra.yaml
               - key: be-class-classrooms.json
                 path: classrooms.json

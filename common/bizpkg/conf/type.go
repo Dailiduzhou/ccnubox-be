@@ -25,14 +25,15 @@ func (e Env) IsDev() bool {
 
 // InfraConf 基础配置
 type InfraConf struct {
-	Env   *Env       `yaml:"env"`
-	Etcd  *EtcdConf  `yaml:"etcd"`
-	Redis *RedisConf `yaml:"redis"`
-	Mysql *MysqlConf `yaml:"mysql"`
-	Kafka *KafkaConf `yaml:"kafka"`
-	Grpc  *GrpcConfs `yaml:"grpc"`
-	Otel  *OtelConf  `yaml:"otel"`
-	Proxy *ProxyConf `yaml:"proxy"`
+	Env           *Env               `yaml:"env"`
+	Etcd          *EtcdConf          `yaml:"etcd"`
+	Redis         *RedisConf         `yaml:"redis"`
+	Mysql         *MysqlConf         `yaml:"mysql"`
+	Kafka         *KafkaConf         `yaml:"kafka"`
+	Grpc          *GrpcConfs         `yaml:"grpc"`
+	Otel          *OtelConf          `yaml:"otel"`
+	Proxy         *ProxyConf         `yaml:"proxy"`
+	Elasticsearch *ElasticsearchConf `yaml:"elasticsearch"`
 }
 
 type EtcdConf struct {
@@ -54,6 +55,13 @@ type KafkaConf struct {
 	Addrs    []string `yaml:"addrs"`
 	Username string   `yaml:"username"`
 	Password string   `yaml:"password"`
+}
+
+type ElasticsearchConf struct {
+	URLs     []string `yaml:"urls"`
+	Username string   `yaml:"username"`
+	Password string   `yaml:"password"`
+	Sniff    bool     `yaml:"sniff"`
 }
 
 type ProxyConf struct {

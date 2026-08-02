@@ -30,7 +30,7 @@ ccnubox-be/
 ├── common/               # 公共定义，protobuf 文件
 ├── be-content/           # 内容服务
 ├── be-ccnu/              # CCNU 一站式登录
-├── be-class/             # 课程服务
+├── be-class_v2/          # 课程服务（统一架构版本）
 ├── be-classlist/         # 课表服务
 ├── be-counter/           # 核心用户判断
 ├── be-elecprice/         # 电费服务
@@ -50,7 +50,7 @@ ccnubox-be/
 | bff | 8080 | BFF 层，聚合服务给前端 |
 | be-content | 19081 | 校历、部门、信息汇总、banner |
 | be-ccnu | 19082 | 一站式登录服务 |
-| be-class | 18000/19083 | 蹭课、空闲教室查询 |
+| be-class_v2 | 18000/20001 | 蹭课、空闲教室查询 |
 | be-classlist | 19084 | 课表管理 |
 | be-counter | 19085 | 核心用户判断 |
 | be-elecprice | 19087 | 电费查询 |
@@ -91,7 +91,7 @@ docker compose -f deploy/docker-compose-infra.yaml up -d
 ./scripts/build-all.sh
 
 # 或构建单个服务
-./scripts/build-be-class.sh
+./scripts/build-be-class_v2.sh
 ```
 
 5. 查看服务状态
@@ -110,7 +110,7 @@ graph TD
 
     subgraph MidService ["中游服务"]
         be_content["be-content:19081"]
-        be_course["be-class:19083"]
+        be_course["be-class_v2:20001"]
         be_course_list["be-classlist:19084"]
         be_grade["be-grade:19089"]
         be_elecprice["be-elecprice:19087"]
@@ -206,13 +206,13 @@ log:
 
 ```bash
 # 进入服务目录
-cd be-class
+cd be-class_v2
 
 # 下载依赖
 go mod tidy
 
 # 运行服务
-go run ./cmd/class -conf ./configs/config.yaml
+go run .
 ```
 
 ## API 文档

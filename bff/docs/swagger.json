@@ -2426,56 +2426,6 @@
                 }
             }
         },
-        "/library/get_credit_points": {
-            "get": {
-                "description": "获取信誉分及扣分记录",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "library"
-                ],
-                "summary": "获取信誉分",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "成功返回信誉分",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/web.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/library.GetCreditPointResponse"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "500": {
-                        "description": "系统异常，获取失败",
-                        "schema": {
-                            "$ref": "#/definitions/web.Response"
-                        }
-                    }
-                }
-            }
-        },
         "/library/get_discussion": {
             "post": {
                 "description": "传入时间获取图书馆研讨间信息",
@@ -2653,53 +2603,6 @@
                 }
             }
         },
-        "/library/reserve_discussion": {
-            "post": {
-                "description": "传入学生ID,时间,主题等预约研讨间",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "library"
-                ],
-                "summary": "预约研讨间",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
-                    {
-                        "description": "预约研讨间所需要的参数",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/library.ReserveDiscussionRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "成功返回预约研讨间成功",
-                        "schema": {
-                            "$ref": "#/definitions/web.Response"
-                        }
-                    },
-                    "500": {
-                        "description": "系统异常，获取失败",
-                        "schema": {
-                            "$ref": "#/definitions/web.Response"
-                        }
-                    }
-                }
-            }
-        },
         "/library/reserve_randomly": {
             "post": {
                 "description": "全校随机选座（可指定楼层）",
@@ -2799,62 +2702,6 @@
                     },
                     "500": {
                         "description": "系统异常，预约失败",
-                        "schema": {
-                            "$ref": "#/definitions/web.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/library/search_user": {
-            "get": {
-                "description": "传入学生学号获取对应的学生ID",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "library"
-                ],
-                "summary": "搜索学生ID",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer Token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "name": "student_id",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "成功返回学生的ID",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/web.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/library.SearchUserResponse"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "500": {
-                        "description": "系统异常，获取失败",
                         "schema": {
                             "$ref": "#/definitions/web.Response"
                         }
@@ -5062,8 +4909,12 @@
         },
         "library.GetSeatRecordRequest": {
             "type": "object",
+            "required": [
+                "date"
+            ],
             "properties": {
                 "date": {
+                    "description": "YYYY-M-D 或 YYYY-MM-DD",
                     "type": "array",
                     "items": {
                         "type": "string"
