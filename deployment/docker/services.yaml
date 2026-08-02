@@ -37,17 +37,18 @@ services:
       - ../logs/be-ccnu/:/logs/
       - ../configs/be-ccnu.yaml:/data/conf/config.yaml
 
-  be-class:
-    container_name: be-class
-    image: be-class:v1
+  be-class_v2:
+    container_name: be-class_v2
+    image: be-class_v2:v1
     restart: "always"
     networks:
       - ccnubox-network
     ports:
-      - "19083:19083"
+      - "20001:20001"
       - "18000:18000"
     volumes:
       - ../configs/be-class.yaml:/data/conf/config.yaml
+      - ../configs/config-infra.yaml:/data/conf/config-infra.yaml
       - ../configs/classrooms.json:/data/conf/classrooms.json
 
   be-classlist:

@@ -1085,9 +1085,12 @@ definitions:
   library.GetSeatRecordRequest:
     properties:
       date:
+        description: YYYY-M-D 或 YYYY-MM-DD
         items:
           type: string
         type: array
+    required:
+    - date
     type: object
   library.GetSeatRecordResponse:
     properties:
@@ -2772,36 +2775,6 @@ paths:
       summary: 获取评论
       tags:
       - library
-  /library/get_credit_points:
-    get:
-      consumes:
-      - application/json
-      description: 获取信誉分及扣分记录
-      parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 成功返回信誉分
-          schema:
-            allOf:
-            - $ref: '#/definitions/web.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/library.GetCreditPointResponse'
-              type: object
-        "500":
-          description: 系统异常，获取失败
-          schema:
-            $ref: '#/definitions/web.Response'
-      summary: 获取信誉分
-      tags:
-      - library
   /library/get_discussion:
     post:
       consumes:
@@ -2910,37 +2883,6 @@ paths:
       summary: 获取预约记录
       tags:
       - library
-  /library/reserve_discussion:
-    post:
-      consumes:
-      - application/json
-      description: 传入学生ID,时间,主题等预约研讨间
-      parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: 预约研讨间所需要的参数
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/library.ReserveDiscussionRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 成功返回预约研讨间成功
-          schema:
-            $ref: '#/definitions/web.Response'
-        "500":
-          description: 系统异常，获取失败
-          schema:
-            $ref: '#/definitions/web.Response'
-      summary: 预约研讨间
-      tags:
-      - library
   /library/reserve_randomly:
     post:
       consumes:
@@ -3006,40 +2948,6 @@ paths:
           schema:
             $ref: '#/definitions/web.Response'
       summary: 预约图书馆座位
-      tags:
-      - library
-  /library/search_user:
-    get:
-      consumes:
-      - application/json
-      description: 传入学生学号获取对应的学生ID
-      parameters:
-      - description: Bearer Token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - in: query
-        name: student_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 成功返回学生的ID
-          schema:
-            allOf:
-            - $ref: '#/definitions/web.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/library.SearchUserResponse'
-              type: object
-        "500":
-          description: 系统异常，获取失败
-          schema:
-            $ref: '#/definitions/web.Response'
-      summary: 搜索学生ID
       tags:
       - library
   /metrics:

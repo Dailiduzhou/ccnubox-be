@@ -11,7 +11,7 @@ trap 'echo "Script interrupted."; exit 1' SIGINT
 ds=(
   "be-banner"
   "be-ccnu"
-  "be-class"
+  "be-class_v2"
   "be-classlist"
   "be-counter"
   "be-elecprice"

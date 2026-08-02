@@ -98,28 +98,115 @@ data:
       maxBackups: 7          # 保留旧日志文件的最大数量
       maxAge: 30             # 日志文件保留天数
       compress: 1             # 是否压缩旧日志文件（1 表示压缩，0 表示不压缩）
+  config-infra.yaml: |
+    env: "prod"
+    mysql:
+      dsn: "root:password@tcp(mysql-0.mysql:3306)/ccnubox?charset=utf8mb4&parseTime=True&loc=Local"
+    redis:
+      addr: "redis-0.redis:6379"
+      password: ""
+    etcd:
+      endpoints:
+        - "etcd-0.etcd:2379"
+      username: "root"
+      password: ""
+    kafka:
+      addrs:
+        - "kafka-0.kafka:9094"
+      username: "root"
+      password: ""
+    elasticsearch:
+      urls:
+        - "http://elasticsearch-0.elasticsearch:9200"
+      username: "elastic"
+      password: ""
+      sniff: false
+    otel:
+      endpoint: "otel-collector:4318"
+    proxy:
+      mode: "remote"
+    grpc:
+      ccnu:
+        name: "ccnu"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20000"
+      class:
+        name: "class"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20001"
+      classlist:
+        name: "classlist"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20002"
+      content:
+        name: "content"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20003"
+      counter:
+        name: "counter"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20004"
+      elecprice:
+        name: "elecprice"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20005"
+      feed:
+        name: "feed"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20006"
+      grade:
+        name: "grade"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20007"
+      library:
+        name: "library"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20008"
+      proxy:
+        name: "proxy"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20009"
+      user:
+        name: "user"
+        weight: 100
+        etcdTTL: 60
+        clientTimeout: 60
+        addr: ":20010"
+
   be-class.yaml: |
-    server:
+    class:
       http:
-        addr: 0.0.0.0:18000
-        timeout: 10s
-      grpc:
-        addr: 0.0.0.0:19083
-        timeout: 10s
-    data:
-      es:
-        url: "http://elasticsearch-0.elasticsearch:9200"
-        setsniff: false
-        username: "elastic"
-        password: ""
-        #重启后是否保留数据
+        addr: ":18000"
+      elasticsearch:
         keepDataAfterRestart: true
-        classroom: "/data/conf/classrooms.json"
-    registry:
-      etcd:
-        addr: "etcd-0.etcd:2379"
-        username: root
-        password: ""
+      proxyStudentID: "xxxxxxxxxx"
+      dataAliveDays: 1
+    log:
+      path: "/logs/app.log"
+      maxSize: 100
+      maxBackups: 7
+      maxAge: 30
+      compress: true
 
   be-classlist.yaml: |
     server:

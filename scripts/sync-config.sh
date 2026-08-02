@@ -29,7 +29,8 @@ declare -A CONFIG_MAP=(
     ["be-banner/config/config-example.yaml"]="be-banner.yaml"
     ["be-calendar/config/config-example.yaml"]="be-calendar.yaml"
     ["be-ccnu/config/config-example.yaml"]="be-ccnu.yaml"
-    ["be-class/configs/config-example.yaml"]="be-class.yaml"
+    ["be-class_v2/config/config-example.yaml"]="be-class.yaml"
+    ["be-class_v2/config/config-infra-example.yaml"]="config-infra.yaml"
     ["be-classlist/config/config-example.yaml"]="be-classlist.yaml"
     ["be-counter/config/config-example.yaml"]="be-counter.yaml"
     ["be-department/config/config-example.yaml"]="be-department.yaml"
@@ -42,7 +43,7 @@ declare -A CONFIG_MAP=(
     ["be-user/config/config-example.yaml"]="be-user.yaml"
     ["be-website/config/config-example.yaml"]="be-website.yaml"
     ["bff/config/config-example.yaml"]="bff.yaml"
-    ["be-class/configs/classrooms.json"]="classrooms.json"
+    ["be-class_v2/repository/classrooms.json"]="classrooms.json"
 )
 
 # 遍历映射并同步

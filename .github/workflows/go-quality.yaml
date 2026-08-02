@@ -18,7 +18,7 @@ jobs:
       matrix:
         module:
           - be-ccnu
-          - be-class
+          - be-class_v2
           - be-classlist
           - be-content
           - be-counter
