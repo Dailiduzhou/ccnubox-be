@@ -14,14 +14,14 @@ func GetCurrentAcademicYearAndSemester(now time.Time) (int, int) {
 	case month >= 9: // 9-12月
 		return year, 1
 
-	case month == 8: // 8月
-		return year, 1
-
 	case month == 1: // 1月
 		return year - 1, 1
 
-	case month >= 2 && month <= 7: // 2-7月
+	case month >= 2 && month <= 6: // 2-6月
 		return year - 1, 2
+
+	case month >= 7 && month <= 8: // 7-8月
+		return year - 1, 3
 	}
 
 	return year, 1 // 理论不会走到这里

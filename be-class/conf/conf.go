@@ -19,10 +19,11 @@ type ServerConf struct {
 }
 
 type ClassConf struct {
-	HTTP           *HTTPConf                `yaml:"http" mapstructure:"http"`
-	Elasticsearch  *ElasticsearchPolicyConf `yaml:"elasticsearch" mapstructure:"elasticsearch"`
-	ProxyStudentID string                   `yaml:"proxyStudentID" mapstructure:"proxyStudentID"`
-	DataAliveDays  int                      `yaml:"dataAliveDays" mapstructure:"dataAliveDays"`
+	HTTP                 *HTTPConf                `yaml:"http" mapstructure:"http"`
+	Elasticsearch        *ElasticsearchPolicyConf `yaml:"elasticsearch" mapstructure:"elasticsearch"`
+	ProxyStudentID       string                   `yaml:"proxyStudentID" mapstructure:"proxyStudentID"`
+	SelectionUploadToken string                   `yaml:"selectionUploadToken" mapstructure:"selectionUploadToken"`
+	DataAliveDays        int                      `yaml:"dataAliveDays" mapstructure:"dataAliveDays"`
 }
 
 type HTTPConf struct {

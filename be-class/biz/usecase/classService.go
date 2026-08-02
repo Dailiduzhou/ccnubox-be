@@ -51,6 +51,7 @@ func (c *ClassServiceUserCase) SearchClassInfo(ctx context.Context, keyWords str
 func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm string) error {
 	//xnm, xqm := tool.GetXnmAndXqm()
 	reqTime := "1949-10-01T00:00:00.000000"
+	seenCursors := map[string]struct{}{reqTime: {}}
 	var tasks []string
 	var syncedAny bool
 
@@ -69,6 +70,10 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 			}
 			return nil
 		}
+		if err := validateNextClassCursor(reqTime, lastTime, seenCursors); err != nil {
+			return fmt.Errorf("invalid classlist cursor (year=%s semester=%s): %w", xnm, xqm, err)
+		}
+		seenCursors[lastTime] = struct{}{}
 
 		// 使用分布式锁来确保只有一个实例在执行
 		lockKey := fmt.Sprintf("add_classlist_to_es_%v_%v_%v", xnm, xqm, reqTime)
@@ -127,6 +132,19 @@ func (c *ClassServiceUserCase) AddClassInfosToES(ctx context.Context, xnm, xqm s
 
 		reqTime = lastTime
 	}
+}
+
+func validateNextClassCursor(current, next string, seen map[string]struct{}) error {
+	if next == "" {
+		return fmt.Errorf("classlist returned an empty next cursor after %q", current)
+	}
+	if next <= current {
+		return fmt.Errorf("classlist cursor did not advance: current=%q next=%q", current, next)
+	}
+	if _, ok := seen[next]; ok {
+		return fmt.Errorf("classlist cursor cycle detected at %q", next)
+	}
+	return nil
 }
 
 func unlockClassSync(locker lock.Locker, lockKey string) error {

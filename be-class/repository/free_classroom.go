@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	freeClassroomIndex   = "ccnubox-free_classroom"
-	freeClassroomMapping = `{
+	freeClassroomIndex        = "ccnubox-free_classroom"
+	freeClassroomCrawlerIndex = "ccnubox-free_classroom_crawler"
+	freeClassroomMapping      = `{
 	"mappings": {
 		"properties": {
 			"year": { "type": "keyword" },
@@ -45,6 +46,32 @@ func (f *FreeClassroomData) RefreshClassroomOccupancy(ctx context.Context) error
 }
 
 func (f *FreeClassroomData) AddClassroomOccupancy(ctx context.Context, year, semester string, cwtPairs ...model.CTWPair) error {
+	return f.addClassroomOccupancy(ctx, freeClassroomIndex, year, semester, cwtPairs...)
+}
+
+func (f *FreeClassroomData) ReplaceCrawledClassroomOccupancy(ctx context.Context, year, semester string, week int, cwtPairs ...model.CTWPair) error {
+	query := elastic.NewBoolQuery().Filter(
+		elastic.NewTermQuery("year", year),
+		elastic.NewTermQuery("semester", semester),
+		elastic.NewTermQuery("weeks", week),
+	)
+	if _, err := f.cli.DeleteByQuery().
+		Index(freeClassroomCrawlerIndex).
+		Query(query).
+		Conflicts("proceed").
+		Do(ctx); err != nil {
+		return fmt.Errorf("delete stale crawled classroom occupancy: %w", err)
+	}
+	if err := f.addClassroomOccupancy(ctx, freeClassroomCrawlerIndex, year, semester, cwtPairs...); err != nil {
+		return err
+	}
+	if _, err := f.cli.Refresh(freeClassroomCrawlerIndex).Do(ctx); err != nil {
+		return fmt.Errorf("refresh crawled classroom occupancy: %w", err)
+	}
+	return nil
+}
+
+func (f *FreeClassroomData) addClassroomOccupancy(ctx context.Context, index, year, semester string, cwtPairs ...model.CTWPair) error {
 	// 定义文档结构
 	type ClassroomOccupancy struct {
 		Year     string `json:"year"`
@@ -85,7 +112,7 @@ func (f *FreeClassroomData) AddClassroomOccupancy(ctx context.Context, year, sem
 
 		// 添加到批量请求
 		req := elastic.NewBulkIndexRequest().
-			Index(freeClassroomIndex).
+			Index(index).
 			Id(docID).
 			Doc(doc)
 		bulkRequest = bulkRequest.Add(req)
@@ -120,31 +147,31 @@ func (f *FreeClassroomData) ClearClassroomOccupancy(ctx context.Context, year, s
 			elastic.NewBoolQuery().MustNot(elastic.NewTermQuery("semester", semester)),
 		)
 
-	deleteResponse, err := f.cli.DeleteByQuery().
-		Index(freeClassroomIndex).
-		Query(query).
-		Conflicts("proceed"). // 忽略冲突
-		Slices("auto").
-		Do(ctx)
-
-	if err != nil {
-		f.logger.Errorf("delete classroom occupancy failed: %v", err)
-		return err
-	}
-
-	// 二次验证是否全部删除
-	if deleteResponse.Deleted > 0 {
-		count, _ := f.cli.Count().Index(freeClassroomIndex).Do(ctx)
-		if count > 0 {
-			f.logger.Warnf("after deleted,still have %d classroom occupancy", count)
+	for _, index := range []string{freeClassroomIndex, freeClassroomCrawlerIndex} {
+		deleteResponse, err := f.cli.DeleteByQuery().
+			Index(index).
+			Query(query).
+			Conflicts("proceed"). // 忽略冲突
+			Slices("auto").
+			Do(ctx)
+		if err != nil {
+			f.logger.Errorf("delete classroom occupancy from %s failed: %v", index, err)
+			return err
 		}
+		f.logger.Infof("delete %d classroom occupancy from %s successfully", deleteResponse.Deleted, index)
 	}
-
-	f.logger.Infof("delete %d classroom occupancy successfully", deleteResponse.Deleted)
 	return nil
 }
 
 func (f *FreeClassroomData) QueryAvailableClassrooms(ctx context.Context, year, semester string, week, day, section int, wherePrefix string, allWheres []string) (map[string]bool, error) {
+	return f.queryAvailableClassrooms(ctx, freeClassroomIndex, year, semester, week, day, section, wherePrefix, allWheres)
+}
+
+func (f *FreeClassroomData) QueryAvailableClassroomsFromCrawler(ctx context.Context, year, semester string, week, day, section int, wherePrefix string, allWheres []string) (map[string]bool, error) {
+	return f.queryAvailableClassrooms(ctx, freeClassroomCrawlerIndex, year, semester, week, day, section, wherePrefix, allWheres)
+}
+
+func (f *FreeClassroomData) queryAvailableClassrooms(ctx context.Context, index, year, semester string, week, day, section int, wherePrefix string, allWheres []string) (map[string]bool, error) {
 	if len(allWheres) == 0 {
 		return nil, fmt.Errorf("allWheres is empty, cannot query available classrooms")
 	}
@@ -155,7 +182,7 @@ func (f *FreeClassroomData) QueryAvailableClassrooms(ctx context.Context, year, 
 		occupancyStat[w] = true
 	}
 
-	occupiedWheres, err := f.getOccupiedWheres(ctx, year, semester, week, day, section, wherePrefix)
+	occupiedWheres, err := f.getOccupiedWheres(ctx, index, year, semester, week, day, section, wherePrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -168,16 +195,16 @@ func (f *FreeClassroomData) QueryAvailableClassrooms(ctx context.Context, year, 
 }
 
 func (f *FreeClassroomData) getAllWheres(ctx context.Context, wherePrefix string) ([]string, error) {
-	boolQuery := elastic.NewBoolQuery().
-		Must(
-			elastic.NewPrefixQuery("where", wherePrefix),
-		)
+	var query elastic.Query = elastic.NewMatchAllQuery()
+	if wherePrefix != "" {
+		query = elastic.NewPrefixQuery("where", wherePrefix)
+	}
 	termsAgg := elastic.NewTermsAggregation().Field("where").Size(10000)
 
 	//只关心聚合结果，不需要文档内容 size设置为0
 	searchResult, err := f.cli.Search().
 		Index(classroomIndex).
-		Query(boolQuery).
+		Query(query).
 		Aggregation("unique_wheres", termsAgg).
 		Size(0).
 		Do(ctx)
@@ -199,7 +226,7 @@ func (f *FreeClassroomData) getAllWheres(ctx context.Context, wherePrefix string
 	return wheres, nil
 }
 
-func (f *FreeClassroomData) getOccupiedWheres(ctx context.Context, year, semester string, week, day, section int, wherePrefix string) ([]string, error) {
+func (f *FreeClassroomData) getOccupiedWheres(ctx context.Context, index, year, semester string, week, day, section int, wherePrefix string) ([]string, error) {
 	boolQuery := elastic.NewBoolQuery().
 		Must(
 			elastic.NewTermQuery("year", year),
@@ -213,7 +240,7 @@ func (f *FreeClassroomData) getOccupiedWheres(ctx context.Context, year, semeste
 
 	//只关心聚合结果，不需要文档内容
 	searchResult, err := f.cli.Search().
-		Index(freeClassroomIndex).
+		Index(index).
 		Query(boolQuery).
 		Aggregation("occupied_wheres", termsAgg).
 		Size(0).

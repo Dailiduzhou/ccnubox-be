@@ -41,3 +41,16 @@ func TestUnlockClassSync(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateNextClassCursor(t *testing.T) {
+	seen := map[string]struct{}{"2026-01-01T00:00:00.000000": {}}
+	if err := validateNextClassCursor("2026-01-01T00:00:00.000000", "2026-01-02T00:00:00.000000", seen); err != nil {
+		t.Fatalf("expected advancing cursor to pass: %v", err)
+	}
+
+	for _, next := range []string{"", "2026-01-01T00:00:00.000000", "2025-12-31T23:59:59.000000"} {
+		if err := validateNextClassCursor("2026-01-01T00:00:00.000000", next, seen); err == nil {
+			t.Fatalf("expected cursor %q to be rejected", next)
+		}
+	}
+}

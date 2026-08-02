@@ -45,10 +45,15 @@ func (f fakeCache) SExpire(_ context.Context, _ string, _ time.Duration) error {
 }
 
 type fakeFreeClassRoomData struct {
-	queryCalled bool
+	queryCalled        bool
+	crawlerQueryCalled bool
 }
 
 func (f *fakeFreeClassRoomData) AddClassroomOccupancy(context.Context, string, string, ...model.CTWPair) error {
+	return nil
+}
+
+func (f *fakeFreeClassRoomData) ReplaceCrawledClassroomOccupancy(context.Context, string, string, int, ...model.CTWPair) error {
 	return nil
 }
 
@@ -66,6 +71,11 @@ func (f *fakeFreeClassRoomData) RefreshClassroomOccupancy(context.Context) error
 
 func (f *fakeFreeClassRoomData) QueryAvailableClassrooms(context.Context, string, string, int, int, int, string, []string) (map[string]bool, error) {
 	f.queryCalled = true
+	return map[string]bool{"n101": true}, nil
+}
+
+func (f *fakeFreeClassRoomData) QueryAvailableClassroomsFromCrawler(context.Context, string, string, int, int, int, string, []string) (map[string]bool, error) {
+	f.crawlerQueryCalled = true
 	return map[string]bool{"n101": true}, nil
 }
 
@@ -301,6 +311,48 @@ func TestQueryAvailableClassroomFromLocalUsesCompletionMarker(t *testing.T) {
 	}
 	if !data.queryCalled {
 		t.Fatal("expected availability query after completion marker")
+	}
+}
+
+func TestQueryAvailableClassroomFromLocalPrefersCrawlerMirror(t *testing.T) {
+	data := &fakeFreeClassRoomData{}
+	cache := fakeCache{data: map[string]string{
+		crawledClassroomOccupancyReadyKey("2025", "3", 3): Finished,
+		classroomOccupancyReadyKey("2025", "3"):           Finished,
+	}}
+	f := NewFreeClassroomBiz(nil, data, nil, nil, cache, nil, logx.Nop())
+
+	if _, err := f.queryAvailableClassroomFromLocal(context.Background(), "2025", "3", 3, 1, []int{1}, "n1", []string{"n101"}); err != nil {
+		t.Fatalf("expected crawler occupancy data to be queryable: %v", err)
+	}
+	if !data.crawlerQueryCalled || data.queryCalled {
+		t.Fatalf("expected crawler mirror only, crawler=%v classlist=%v", data.crawlerQueryCalled, data.queryCalled)
+	}
+}
+
+func TestBuildCrawledClassroomOccupancy(t *testing.T) {
+	schedule := newFreeClassroomSchedule()
+	schedule[1][1] = []string{"n101"}
+	schedule[1][2] = []string{"n102"}
+
+	pairs := buildCrawledClassroomOccupancy(schedule, 3, []string{"n101", "n102"})
+	occupied := make(map[string]map[int]bool)
+	for _, pair := range pairs {
+		if pair.CT.Day != 1 || len(pair.CT.Weeks) != 1 || pair.CT.Weeks[0] != 3 {
+			continue
+		}
+		if occupied[pair.Where] == nil {
+			occupied[pair.Where] = make(map[int]bool)
+		}
+		for _, section := range pair.CT.Sections {
+			occupied[pair.Where][section] = true
+		}
+	}
+	if occupied["n101"][1] || !occupied["n101"][2] {
+		t.Fatalf("unexpected n101 occupancy: %v", occupied["n101"])
+	}
+	if !occupied["n102"][1] || occupied["n102"][2] {
+		t.Fatalf("unexpected n102 occupancy: %v", occupied["n102"])
 	}
 }
 
