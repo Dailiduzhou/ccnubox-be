@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/be-class/biz/model"
@@ -36,6 +37,7 @@ const (
 type FreeClassRoomData interface {
 	AddClassroomOccupancy(ctx context.Context, year, semester string, cwtPairs ...model.CTWPair) error
 	ReplaceCrawledClassroomOccupancy(ctx context.Context, year, semester string, week int, cwtPairs ...model.CTWPair) error
+	HasCrawledClassroomOccupancy(ctx context.Context, year, semester string, week int) (bool, error)
 	ClearClassroomOccupancy(ctx context.Context, year, semester string) error
 	GetAllClassroom(ctx context.Context, wherePrefix string) ([]string, error)
 	RefreshClassroomOccupancy(ctx context.Context) error
@@ -59,6 +61,7 @@ type FreeClassroomBiz struct {
 	cache             Cache
 	p                 proxy.Client
 	logger            logger.Logger
+	crawlerRepairs    sync.Map
 }
 
 func NewFreeClassroomBiz(classData ClassData, data FreeClassRoomData, cookieCli CookieClient, lockBuilder lock.Builder, cache Cache, p proxy.Client, l logger.Logger) *FreeClassroomBiz {
@@ -482,10 +485,24 @@ func toLowerASCII(ch byte) byte {
 
 func (f *FreeClassroomBiz) queryAvailableClassroomFromLocal(ctx context.Context, year, semester string, week, day int, sections []int, wherePrefix string, allWheres []string) (map[string][]bool, error) {
 	useCrawlerData := false
-	status, crawlerErr := f.cache.Get(ctx, crawledClassroomOccupancyReadyKey(year, semester, week))
+	crawlerReadyKey := crawledClassroomOccupancyReadyKey(year, semester, week)
+	status, crawlerErr := f.cache.Get(ctx, crawlerReadyKey)
 	if crawlerErr == nil && status == Finished {
-		useCrawlerData = true
-	} else {
+		hasCrawlerData, err := f.freeClassRoomData.HasCrawledClassroomOccupancy(ctx, year, semester, week)
+		if err == nil && hasCrawlerData {
+			useCrawlerData = true
+		} else {
+			if err != nil {
+				f.logger.Warnf("failed to verify crawler occupancy mirror, falling back to classlist data: %v", err)
+			} else {
+				f.logger.Warnf("crawler occupancy mirror is marked ready but contains no data; falling back to classlist data")
+			}
+			if err := f.cache.Del(ctx, crawlerReadyKey); err != nil {
+				f.logger.Warnf("failed to clear stale crawler occupancy readiness: %v", err)
+			}
+		}
+	}
+	if !useCrawlerData {
 		status, err := f.cache.Get(ctx, classroomOccupancyReadyKey(year, semester))
 		if err != nil || status != Finished {
 			return nil, fmt.Errorf("local classroom occupancy data is not ready for year=%s semester=%s week=%d", year, semester, week)
@@ -538,7 +555,7 @@ func (f *FreeClassroomBiz) getFreeClassrooms(ctx context.Context, year, semester
 	if err == nil {
 		status, readyErr := f.cache.Get(ctx, crawledClassroomOccupancyReadyKey(year, semester, week))
 		if readyErr != nil || status != Finished {
-			go f.repairCrawledClassroomMirrorFromCache(year, semester, week)
+			f.startCrawledClassroomMirrorRepair(year, semester, week)
 		}
 		return freeClassroomCache, nil
 	}
@@ -918,14 +935,39 @@ func (f *FreeClassroomBiz) persistCrawledClassroomMirror(ctx context.Context, ye
 	if err != nil {
 		return fmt.Errorf("load classroom catalog for crawler mirror: %w", err)
 	}
+	if len(allRooms) == 0 {
+		return fmt.Errorf("classroom catalog for crawler mirror is empty")
+	}
 	cwtPairs := buildCrawledClassroomOccupancy(schedule, week, allRooms)
+	readyKey := crawledClassroomOccupancyReadyKey(year, semester, week)
+	if err := f.cache.Del(ctx, readyKey); err != nil {
+		return fmt.Errorf("clear crawler occupancy readiness before replacement: %w", err)
+	}
 	if err := f.freeClassRoomData.ReplaceCrawledClassroomOccupancy(ctx, year, semester, week, cwtPairs...); err != nil {
 		return fmt.Errorf("replace crawled classroom occupancy: %w", err)
 	}
-	if err := f.cache.Set(ctx, crawledClassroomOccupancyReadyKey(year, semester, week), Finished, 2*Expire); err != nil {
+	if err := f.cache.Set(ctx, readyKey, Finished, 2*Expire); err != nil {
 		return fmt.Errorf("mark crawled classroom occupancy ready: %w", err)
 	}
 	return nil
+}
+
+func (f *FreeClassroomBiz) startCrawledClassroomMirrorRepair(year, semester string, week int) {
+	key := fmt.Sprintf("%s:%s:%d", year, semester, week)
+	startOnce(&f.crawlerRepairs, key, func() {
+		f.repairCrawledClassroomMirrorFromCache(year, semester, week)
+	})
+}
+
+func startOnce(inFlight *sync.Map, key string, fn func()) bool {
+	if _, loaded := inFlight.LoadOrStore(key, struct{}{}); loaded {
+		return false
+	}
+	go func() {
+		defer inFlight.Delete(key)
+		fn()
+	}()
+	return true
 }
 
 func (f *FreeClassroomBiz) repairCrawledClassroomMirrorFromCache(year, semester string, week int) {

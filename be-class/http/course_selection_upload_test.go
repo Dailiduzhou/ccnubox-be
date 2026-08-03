@@ -139,6 +139,35 @@ func TestGetCWTPairsRejectsShortRows(t *testing.T) {
 	}
 }
 
+func TestGetCWTPairsSkipsRowsWithBothConfiguredColumnsMissing(t *testing.T) {
+	f := excelize.NewFile()
+	defer f.Close()
+	const sheet = "data"
+	if _, err := f.NewSheet(sheet); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetCellValue(sheet, "B2", "星期一第1-2节{1-2周}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetCellValue(sheet, "C2", "N101"); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the row visible to GetRows while leaving both configured columns absent.
+	if err := f.SetCellValue(sheet, "A3", "ignored trailing value"); err != nil {
+		t.Fatal(err)
+	}
+
+	pairs, err := getCWTPairs(f, map[string]NecessaryIndex{
+		sheet: {ClassTimeIdx: 1, ClassWhereIdx: 2},
+	})
+	if err != nil {
+		t.Fatalf("expected missing trailing configured cells to be skipped: %v", err)
+	}
+	if len(pairs) != 1 || pairs[0].Where != "N101" {
+		t.Fatalf("unexpected occupancy pairs: %+v", pairs)
+	}
+}
+
 func TestParseTimeRejectsMalformedValues(t *testing.T) {
 	for _, value := range []string{
 		"星期一第1-2节",

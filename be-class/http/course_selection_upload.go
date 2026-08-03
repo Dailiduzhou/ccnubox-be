@@ -186,11 +186,13 @@ func getCWTPairs(f *excelize.File, mp map[string]NecessaryIndex) ([]model.CTWPai
 			if len(datas) >= maxWorkbookRows {
 				return nil, fmt.Errorf("workbook exceeds %d data rows", maxWorkbookRows)
 			}
-			if necessaryIndex.ClassTimeIdx >= uint(len(rows[i])) || necessaryIndex.ClassWhereIdx >= uint(len(rows[i])) {
-				return nil, fmt.Errorf("sheet %q row %d does not contain configured columns", sheetName, i+1)
+			var classTime, classWhere string
+			if necessaryIndex.ClassTimeIdx < uint(len(rows[i])) {
+				classTime = strings.TrimSpace(rows[i][necessaryIndex.ClassTimeIdx])
 			}
-			classTime := strings.TrimSpace(rows[i][necessaryIndex.ClassTimeIdx])
-			classWhere := strings.TrimSpace(rows[i][necessaryIndex.ClassWhereIdx])
+			if necessaryIndex.ClassWhereIdx < uint(len(rows[i])) {
+				classWhere = strings.TrimSpace(rows[i][necessaryIndex.ClassWhereIdx])
+			}
 			if classTime == "" && classWhere == "" {
 				continue
 			}

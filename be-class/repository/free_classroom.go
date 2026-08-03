@@ -71,6 +71,19 @@ func (f *FreeClassroomData) ReplaceCrawledClassroomOccupancy(ctx context.Context
 	return nil
 }
 
+func (f *FreeClassroomData) HasCrawledClassroomOccupancy(ctx context.Context, year, semester string, week int) (bool, error) {
+	query := elastic.NewBoolQuery().Filter(
+		elastic.NewTermQuery("year", year),
+		elastic.NewTermQuery("semester", semester),
+		elastic.NewTermQuery("weeks", week),
+	)
+	count, err := f.cli.Count(freeClassroomCrawlerIndex).Query(query).Do(ctx)
+	if err != nil {
+		return false, fmt.Errorf("count crawled classroom occupancy: %w", err)
+	}
+	return count > 0, nil
+}
+
 func (f *FreeClassroomData) addClassroomOccupancy(ctx context.Context, index, year, semester string, cwtPairs ...model.CTWPair) error {
 	// 定义文档结构
 	type ClassroomOccupancy struct {
