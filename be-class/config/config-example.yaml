@@ -4,6 +4,7 @@ class:
   elasticsearch:
     keepDataAfterRestart: true
   proxyStudentID: "xxxxxxxxxx"
+  selectionUploadToken: "replace-with-a-long-random-token"
   dataAliveDays: 1
 
 log:

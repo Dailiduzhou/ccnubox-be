@@ -41,7 +41,7 @@ func NewEsClient(infraCfg *conf.InfraConf, serverCfg *conf.ServerConf, l logger.
 
 	l.Info("connected to Elasticsearch")
 
-	for name, mapping := range map[string]string{classIndexName: classMapping, freeClassroomIndex: freeClassroomMapping, classroomIndex: classroomMapping} {
+	for name, mapping := range map[string]string{classIndexName: classMapping, freeClassroomIndex: freeClassroomMapping, freeClassroomCrawlerIndex: freeClassroomMapping, classroomIndex: classroomMapping} {
 		if err := createIndex(ctx, cli, policy.KeepDataAfterRestart, name, mapping, l); err != nil {
 			return nil, err
 		}

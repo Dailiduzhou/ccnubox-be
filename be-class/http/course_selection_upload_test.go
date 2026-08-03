@@ -87,6 +87,7 @@ func TestUploadSelection(t *testing.T) {
 	// 创建模拟请求
 	req := httptest.NewRequest(http.MethodPost, "/upload", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-upload-token")
 
 	// 使用 httptest.NewRecorder() 来模拟响应
 	rr := httptest.NewRecorder()
@@ -95,6 +96,7 @@ func TestUploadSelection(t *testing.T) {
 	saver := &MockFreeClassRoomBiz{}
 	selectionUploader := &SelectionUploader{
 		freeClassRoom: saver,
+		uploadToken:   "test-upload-token",
 	}
 
 	// 调用 UploadSelection 方法
@@ -106,4 +108,75 @@ func TestUploadSelection(t *testing.T) {
 	assert.Equal(t, "2024", saver.year)
 	assert.Equal(t, "2", saver.semester)
 	assert.NotEmpty(t, saver.ctwPairs)
+}
+
+func TestUploadSelectionRequiresAuthorization(t *testing.T) {
+	uploader := &SelectionUploader{freeClassRoom: &MockFreeClassRoomBiz{}, uploadToken: "secret"}
+	req := httptest.NewRequest(http.MethodPost, "/class_selection/upload", nil)
+	rr := httptest.NewRecorder()
+
+	uploader.UploadSelection(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+}
+
+func TestGetCWTPairsRejectsShortRows(t *testing.T) {
+	f := excelize.NewFile()
+	defer f.Close()
+	const sheet = "data"
+	if _, err := f.NewSheet(sheet); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetCellValue(sheet, "A2", "星期一第1-2节{1-2周}"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := getCWTPairs(f, map[string]NecessaryIndex{
+		sheet: {ClassTimeIdx: 0, ClassWhereIdx: 3},
+	})
+	if err == nil {
+		t.Fatal("expected a short row to be rejected")
+	}
+}
+
+func TestGetCWTPairsSkipsRowsWithBothConfiguredColumnsMissing(t *testing.T) {
+	f := excelize.NewFile()
+	defer f.Close()
+	const sheet = "data"
+	if _, err := f.NewSheet(sheet); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetCellValue(sheet, "B2", "星期一第1-2节{1-2周}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetCellValue(sheet, "C2", "N101"); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the row visible to GetRows while leaving both configured columns absent.
+	if err := f.SetCellValue(sheet, "A3", "ignored trailing value"); err != nil {
+		t.Fatal(err)
+	}
+
+	pairs, err := getCWTPairs(f, map[string]NecessaryIndex{
+		sheet: {ClassTimeIdx: 1, ClassWhereIdx: 2},
+	})
+	if err != nil {
+		t.Fatalf("expected missing trailing configured cells to be skipped: %v", err)
+	}
+	if len(pairs) != 1 || pairs[0].Where != "N101" {
+		t.Fatalf("unexpected occupancy pairs: %+v", pairs)
+	}
+}
+
+func TestParseTimeRejectsMalformedValues(t *testing.T) {
+	for _, value := range []string{
+		"星期一第1-2节",
+		"星期一第1-2节{bad}",
+		"星期一第0-2节{1-2周}",
+		"星期一第1-13节{1-2周}",
+	} {
+		if _, err := parseTime(value); err == nil {
+			t.Fatalf("expected %q to be rejected", value)
+		}
+	}
 }

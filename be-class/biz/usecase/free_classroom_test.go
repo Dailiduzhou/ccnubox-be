@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,11 +46,26 @@ func (f fakeCache) SExpire(_ context.Context, _ string, _ time.Duration) error {
 }
 
 type fakeFreeClassRoomData struct {
-	queryCalled bool
+	queryCalled        bool
+	crawlerQueryCalled bool
+	crawlerHasData     bool
+	crawlerHasErr      error
+	allRooms           []string
+	replaceErr         error
+	replaceCalls       int
 }
 
 func (f *fakeFreeClassRoomData) AddClassroomOccupancy(context.Context, string, string, ...model.CTWPair) error {
 	return nil
+}
+
+func (f *fakeFreeClassRoomData) ReplaceCrawledClassroomOccupancy(context.Context, string, string, int, ...model.CTWPair) error {
+	f.replaceCalls++
+	return f.replaceErr
+}
+
+func (f *fakeFreeClassRoomData) HasCrawledClassroomOccupancy(context.Context, string, string, int) (bool, error) {
+	return f.crawlerHasData, f.crawlerHasErr
 }
 
 func (f *fakeFreeClassRoomData) ClearClassroomOccupancy(context.Context, string, string) error {
@@ -57,7 +73,7 @@ func (f *fakeFreeClassRoomData) ClearClassroomOccupancy(context.Context, string,
 }
 
 func (f *fakeFreeClassRoomData) GetAllClassroom(context.Context, string) ([]string, error) {
-	return nil, nil
+	return f.allRooms, nil
 }
 
 func (f *fakeFreeClassRoomData) RefreshClassroomOccupancy(context.Context) error {
@@ -68,6 +84,47 @@ func (f *fakeFreeClassRoomData) QueryAvailableClassrooms(context.Context, string
 	f.queryCalled = true
 	return map[string]bool{"n101": true}, nil
 }
+
+func (f *fakeFreeClassRoomData) QueryAvailableClassroomsFromCrawler(context.Context, string, string, int, int, int, string, []string) (map[string]bool, error) {
+	f.crawlerQueryCalled = true
+	return map[string]bool{"n101": true}, nil
+}
+
+type mutableFakeCache struct {
+	data      map[string]string
+	deleted   []string
+	setKeys   []string
+	deleteErr error
+}
+
+func (f *mutableFakeCache) Get(_ context.Context, key string) (string, error) {
+	value, ok := f.data[key]
+	if !ok {
+		return "", errors.New("cache miss")
+	}
+	return value, nil
+}
+
+func (f *mutableFakeCache) Set(_ context.Context, key string, value interface{}, _ time.Duration) error {
+	f.setKeys = append(f.setKeys, key)
+	f.data[key] = value.(string)
+	return nil
+}
+
+func (f *mutableFakeCache) Del(_ context.Context, keys ...string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	for _, key := range keys {
+		f.deleted = append(f.deleted, key)
+		delete(f.data, key)
+	}
+	return nil
+}
+
+func (*mutableFakeCache) SAdd(context.Context, string, ...interface{}) error   { return nil }
+func (*mutableFakeCache) SMembers(context.Context, string) ([]string, error)   { return nil, nil }
+func (*mutableFakeCache) SExpire(context.Context, string, time.Duration) error { return nil }
 
 func TestToSerializableClassroomStatsSortsNaturally(t *testing.T) {
 	stats := toSerializableClassroomStats(map[string][]bool{
@@ -301,6 +358,150 @@ func TestQueryAvailableClassroomFromLocalUsesCompletionMarker(t *testing.T) {
 	}
 	if !data.queryCalled {
 		t.Fatal("expected availability query after completion marker")
+	}
+}
+
+func TestQueryAvailableClassroomFromLocalPrefersCrawlerMirror(t *testing.T) {
+	data := &fakeFreeClassRoomData{crawlerHasData: true}
+	cache := fakeCache{data: map[string]string{
+		crawledClassroomOccupancyReadyKey("2025", "3", 3): Finished,
+		classroomOccupancyReadyKey("2025", "3"):           Finished,
+	}}
+	f := NewFreeClassroomBiz(nil, data, nil, nil, cache, nil, logx.Nop())
+
+	if _, err := f.queryAvailableClassroomFromLocal(context.Background(), "2025", "3", 3, 1, []int{1}, "n1", []string{"n101"}); err != nil {
+		t.Fatalf("expected crawler occupancy data to be queryable: %v", err)
+	}
+	if !data.crawlerQueryCalled || data.queryCalled {
+		t.Fatalf("expected crawler mirror only, crawler=%v classlist=%v", data.crawlerQueryCalled, data.queryCalled)
+	}
+}
+
+func TestQueryAvailableClassroomFromLocalFallsBackWhenCrawlerMirrorIsEmpty(t *testing.T) {
+	data := &fakeFreeClassRoomData{}
+	crawlerReadyKey := crawledClassroomOccupancyReadyKey("2025", "3", 3)
+	cache := &mutableFakeCache{data: map[string]string{
+		crawlerReadyKey:                         Finished,
+		classroomOccupancyReadyKey("2025", "3"): Finished,
+	}}
+	f := NewFreeClassroomBiz(nil, data, nil, nil, cache, nil, logx.Nop())
+
+	if _, err := f.queryAvailableClassroomFromLocal(context.Background(), "2025", "3", 3, 1, []int{1}, "n1", []string{"n101"}); err != nil {
+		t.Fatalf("expected empty crawler mirror to fall back to classlist data: %v", err)
+	}
+	if !data.queryCalled || data.crawlerQueryCalled {
+		t.Fatalf("expected classlist fallback only, crawler=%v classlist=%v", data.crawlerQueryCalled, data.queryCalled)
+	}
+	if _, ok := cache.data[crawlerReadyKey]; ok {
+		t.Fatal("expected stale crawler readiness marker to be cleared")
+	}
+}
+
+func TestPersistCrawledClassroomMirrorClearsReadinessBeforeReplacement(t *testing.T) {
+	readyKey := crawledClassroomOccupancyReadyKey("2025", "3", 3)
+	cache := &mutableFakeCache{data: map[string]string{readyKey: Finished}}
+	data := &fakeFreeClassRoomData{
+		allRooms:   []string{"n101"},
+		replaceErr: errors.New("partial bulk failure"),
+	}
+	f := NewFreeClassroomBiz(nil, data, nil, nil, cache, nil, logx.Nop())
+
+	err := f.persistCrawledClassroomMirror(context.Background(), "2025", "3", 3, newFreeClassroomSchedule())
+	if err == nil {
+		t.Fatal("expected crawler mirror replacement failure")
+	}
+	if _, ok := cache.data[readyKey]; ok {
+		t.Fatal("expected readiness marker to remain absent after replacement failure")
+	}
+	if len(cache.setKeys) != 0 {
+		t.Fatalf("readiness must not be marked after replacement failure: %v", cache.setKeys)
+	}
+}
+
+func TestPersistCrawledClassroomMirrorRejectsEmptyClassroomCatalog(t *testing.T) {
+	data := &fakeFreeClassRoomData{}
+	f := NewFreeClassroomBiz(nil, data, nil, nil, &mutableFakeCache{data: map[string]string{}}, nil, logx.Nop())
+
+	err := f.persistCrawledClassroomMirror(context.Background(), "2025", "3", 3, newFreeClassroomSchedule())
+	if err == nil || data.replaceCalls != 0 {
+		t.Fatalf("expected empty classroom catalog to fail before replacement, err=%v calls=%d", err, data.replaceCalls)
+	}
+}
+
+func TestStartOnceDeduplicatesConcurrentWork(t *testing.T) {
+	var inFlight sync.Map
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	calls := 0
+
+	if !startOnce(&inFlight, "2025:3:3", func() {
+		calls++
+		close(started)
+		<-release
+		close(finished)
+	}) {
+		t.Fatal("expected first repair to start")
+	}
+	<-started
+	for i := 0; i < 20; i++ {
+		if startOnce(&inFlight, "2025:3:3", func() { calls++ }) {
+			t.Fatal("expected duplicate repair to be suppressed")
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("expected one in-flight repair, got %d", calls)
+	}
+	close(release)
+	<-finished
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, loaded := inFlight.Load("2025:3:3"); !loaded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("repair key was not released")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	secondFinished := make(chan struct{})
+	if !startOnce(&inFlight, "2025:3:3", func() {
+		calls++
+		close(secondFinished)
+	}) {
+		t.Fatal("expected a later repair to start after the first completed")
+	}
+	<-secondFinished
+	if calls != 2 {
+		t.Fatalf("expected two sequential repairs, got %d", calls)
+	}
+}
+
+func TestBuildCrawledClassroomOccupancy(t *testing.T) {
+	schedule := newFreeClassroomSchedule()
+	schedule[1][1] = []string{"n101"}
+	schedule[1][2] = []string{"n102"}
+
+	pairs := buildCrawledClassroomOccupancy(schedule, 3, []string{"n101", "n102"})
+	occupied := make(map[string]map[int]bool)
+	for _, pair := range pairs {
+		if pair.CT.Day != 1 || len(pair.CT.Weeks) != 1 || pair.CT.Weeks[0] != 3 {
+			continue
+		}
+		if occupied[pair.Where] == nil {
+			occupied[pair.Where] = make(map[int]bool)
+		}
+		for _, section := range pair.CT.Sections {
+			occupied[pair.Where][section] = true
+		}
+	}
+	if occupied["n101"][1] || !occupied["n101"][2] {
+		t.Fatalf("unexpected n101 occupancy: %v", occupied["n101"])
+	}
+	if !occupied["n102"][1] || occupied["n102"][2] {
+		t.Fatalf("unexpected n102 occupancy: %v", occupied["n102"])
 	}
 }
 

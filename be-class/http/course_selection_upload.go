@@ -1,14 +1,33 @@
 package http
 
 import (
-	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
-	"github.com/asynccnu/ccnubox-be/be-class/biz/model"
-	"github.com/xuri/excelize/v2"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
+
+	"github.com/asynccnu/ccnubox-be/be-class/biz/model"
+	"github.com/asynccnu/ccnubox-be/be-class/conf"
+	"github.com/xuri/excelize/v2"
+)
+
+const (
+	maxUploadSize     = 32 << 20
+	maxUnzipSize      = 128 << 20
+	maxUnzipXMLSize   = 16 << 20
+	maxUploadSheets   = 32
+	maxWorkbookRows   = 100_000
+	maxOccupancyPairs = 1_000_000
+)
+
+var (
+	academicYearPattern = regexp.MustCompile(`^(\d{4})(?:-(\d{4}))?$`)
+	classTimePattern    = regexp.MustCompile(`^星期([一二三四五六日])第(\d{1,2})-(\d{1,2})节\{(.+)\}$`)
+	weekPattern         = regexp.MustCompile(`^(\d{1,2})(?:-(\d{1,2}))?周(?:\((单|双)\))?$`)
 )
 
 // 必要的列的索引
@@ -30,11 +49,17 @@ type FreeClassRoomSaver interface {
 // 处理上传选课手册的http服务
 type SelectionUploader struct {
 	freeClassRoom FreeClassRoomSaver
+	uploadToken   string
 }
 
-func NewSelectionUploader(freeClassRoom FreeClassRoomSaver) *SelectionUploader {
+func NewSelectionUploader(freeClassRoom FreeClassRoomSaver, cfg *conf.ServerConf) *SelectionUploader {
+	var uploadToken string
+	if cfg != nil && cfg.Class != nil {
+		uploadToken = strings.TrimSpace(cfg.Class.SelectionUploadToken)
+	}
 	return &SelectionUploader{
 		freeClassRoom: freeClassRoom,
+		uploadToken:   uploadToken,
 	}
 }
 func (s *SelectionUploader) UploadSelection(w http.ResponseWriter, r *http.Request) {
@@ -42,10 +67,24 @@ func (s *SelectionUploader) UploadSelection(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if s.uploadToken == "" {
+		http.Error(w, "Upload endpoint is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	expectedAuthorization := "Bearer " + s.uploadToken
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(expectedAuthorization)) != 1 {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
-	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32MB 内存，超出的部分存到磁盘
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
 		http.Error(w, "Failed to parse multipart form", http.StatusBadRequest)
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 
 	// 解码 JSON
@@ -53,6 +92,10 @@ func (s *SelectionUploader) UploadSelection(w http.ResponseWriter, r *http.Reque
 	var req UploadReq
 	if err := json.Unmarshal([]byte(jsonData), &req); err != nil {
 		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
+	if err := validateUploadReq(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid upload metadata: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -64,23 +107,19 @@ func (s *SelectionUploader) UploadSelection(w http.ResponseWriter, r *http.Reque
 	}
 	defer file.Close()
 
-	buf := new(bytes.Buffer)
-	_, err = buf.ReadFrom(file)
+	f, err := excelize.OpenReader(file, excelize.Options{
+		UnzipSizeLimit:    maxUnzipSize,
+		UnzipXMLSizeLimit: maxUnzipXMLSize,
+	})
 	if err != nil {
-		http.Error(w, "Failed to read file", http.StatusInternalServerError)
-		return
-	}
-
-	f, err := excelize.OpenReader(buf)
-	if err != nil {
-		http.Error(w, "Failed to open file", http.StatusInternalServerError)
+		http.Error(w, "Failed to open file", http.StatusBadRequest)
 		return
 	}
 	defer f.Close()
 
 	ctwPairs, err := getCWTPairs(f, req.Sheets)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to handle excel:%v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to handle excel: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -94,7 +133,37 @@ func (s *SelectionUploader) UploadSelection(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
-	w.Write([]byte(`{"msg":"success"}`))
+	_, _ = w.Write([]byte(`{"msg":"success"}`))
+}
+
+func validateUploadReq(req *UploadReq) error {
+	match := academicYearPattern.FindStringSubmatch(strings.TrimSpace(req.Year))
+	if match == nil {
+		return fmt.Errorf("year must be YYYY or YYYY-YYYY")
+	}
+	startYear, _ := strconv.Atoi(match[1])
+	if match[2] != "" {
+		endYear, _ := strconv.Atoi(match[2])
+		if endYear != startYear+1 {
+			return fmt.Errorf("academic year range is not consecutive")
+		}
+	}
+	if startYear < 2000 || startYear > 3000 {
+		return fmt.Errorf("year is out of range")
+	}
+	req.Year = strconv.Itoa(startYear)
+	if req.Semester != "1" && req.Semester != "2" && req.Semester != "3" {
+		return fmt.Errorf("semester must be 1, 2, or 3")
+	}
+	if len(req.Sheets) == 0 || len(req.Sheets) > maxUploadSheets {
+		return fmt.Errorf("sheets must contain between 1 and %d entries", maxUploadSheets)
+	}
+	for sheetName := range req.Sheets {
+		if strings.TrimSpace(sheetName) == "" {
+			return fmt.Errorf("sheet name cannot be empty")
+		}
+	}
+	return nil
 }
 
 func getCWTPairs(f *excelize.File, mp map[string]NecessaryIndex) ([]model.CTWPair, error) {
@@ -114,9 +183,25 @@ func getCWTPairs(f *excelize.File, mp map[string]NecessaryIndex) ([]model.CTWPai
 			if i == 0 {
 				continue
 			}
+			if len(datas) >= maxWorkbookRows {
+				return nil, fmt.Errorf("workbook exceeds %d data rows", maxWorkbookRows)
+			}
+			var classTime, classWhere string
+			if necessaryIndex.ClassTimeIdx < uint(len(rows[i])) {
+				classTime = strings.TrimSpace(rows[i][necessaryIndex.ClassTimeIdx])
+			}
+			if necessaryIndex.ClassWhereIdx < uint(len(rows[i])) {
+				classWhere = strings.TrimSpace(rows[i][necessaryIndex.ClassWhereIdx])
+			}
+			if classTime == "" && classWhere == "" {
+				continue
+			}
+			if classTime == "" || classWhere == "" {
+				return nil, fmt.Errorf("sheet %q row %d has incomplete class time or classroom", sheetName, i+1)
+			}
 			datas = append(datas, ClassRoomTimeData{
-				Time:  rows[i][necessaryIndex.ClassTimeIdx],
-				Where: rows[i][necessaryIndex.ClassWhereIdx],
+				Time:  classTime,
+				Where: classWhere,
 			})
 		}
 	}
@@ -124,17 +209,30 @@ func getCWTPairs(f *excelize.File, mp map[string]NecessaryIndex) ([]model.CTWPai
 	var ctwPairs []model.CTWPair
 
 	for _, data := range datas {
-		ctimes := parseTime(data.Time)
+		ctimes, err := parseTime(data.Time)
+		if err != nil {
+			return nil, err
+		}
 		wheres := strings.Split(data.Where, ";")
 
 		for _, ct := range ctimes {
 			for _, where := range wheres {
+				where = strings.TrimSpace(where)
+				if where == "" {
+					return nil, fmt.Errorf("classroom cannot be empty")
+				}
+				if len(ctwPairs) >= maxOccupancyPairs {
+					return nil, fmt.Errorf("workbook expands to more than %d occupancy records", maxOccupancyPairs)
+				}
 				ctwPairs = append(ctwPairs, model.CTWPair{
 					CT:    ct,
 					Where: where,
 				})
 			}
 		}
+	}
+	if len(ctwPairs) == 0 {
+		return nil, fmt.Errorf("workbook contains no classroom occupancy data")
 	}
 	return ctwPairs, nil
 }
@@ -144,7 +242,7 @@ func getCWTPairs(f *excelize.File, mp map[string]NecessaryIndex) ([]model.CTWPai
 // 星期一第1-2节{4-18周(双)};星期二第7-8节{4-19周}
 // 星期一第5-8节{4-6周(双),7-8周};星期二第5-8节{4-6周(双),7-8周};星期四第1-4节{4-6周(双),7-8周};星期五第1-4节{4-6周(双),7-8周}
 // 星期一第9-10节{5-17周(单)};星期二第1-2节{4-19周}
-func parseTime(val string) []model.CTime {
+func parseTime(val string) ([]model.CTime, error) {
 	var mp = map[string]int{
 		"一": 1,
 		"二": 2,
@@ -158,71 +256,56 @@ func parseTime(val string) []model.CTime {
 	uniteTimes := strings.Split(val, ";")
 	res := make([]model.CTime, 0, len(uniteTimes))
 	for _, uniteTime := range uniteTimes {
-		var tt model.CTime
-
-		index := strings.Index(uniteTime, "{")
-		tmp1 := uniteTime[:index]                     //代表 "星期一第1-2节" 这样的部分
-		tmp2 := uniteTime[index+1 : len(uniteTime)-1] //代表 4-19周 这个部分
-
-		//获取星期几和第几节
-		index = strings.Index(tmp1, "第")
-		xinqi := tmp1[:index]  // 代表如 "星期一"的部分
-		jieshu := tmp1[index:] // 代表如 "第1-2节" 的部分
-
-		dayStr := strings.TrimPrefix(xinqi, "星期")
-		day := mp[dayStr] //星期几
-
-		var jieStart, jieEnd int
-		fmt.Sscanf(jieshu, "第%d-%d节", &jieStart, &jieEnd) //第几节
-
-		tt.Day = day
+		uniteTime = strings.TrimSpace(uniteTime)
+		match := classTimePattern.FindStringSubmatch(uniteTime)
+		if match == nil {
+			return nil, fmt.Errorf("invalid class time %q", uniteTime)
+		}
+		jieStart, _ := strconv.Atoi(match[2])
+		jieEnd, _ := strconv.Atoi(match[3])
+		if jieStart < 1 || jieEnd > 12 || jieStart > jieEnd {
+			return nil, fmt.Errorf("invalid class sections in %q", uniteTime)
+		}
+		tt := model.CTime{Day: mp[match[1]]}
 		for i := jieStart; i <= jieEnd; i++ {
 			tt.Sections = append(tt.Sections, i)
 		}
 
-		//开始获取周数
-		weekStrs := strings.Split(tmp2, ",")
+		weekStrs := strings.Split(match[4], ",")
 
 		for _, weekStr := range weekStrs {
-
-			index = strings.Index(weekStr, "(")
-			var weekStart, weekEnd int
-			var pattern int // 1代表单周，2代表双周，0代表没有
-			//先看看有没有括号
-			if index == -1 {
-				fmt.Sscanf(weekStr, "%d-%d周", &weekStart, &weekEnd)
-			} else {
-				var patternStr string
-				//"%s" 读取的是一个不包含空格的字符串，它会直接匹配 "双)"
-				//括号 () 仍然被解析为字符串的一部分，因为 Sscanf 不能自动去掉这些符号
-				fmt.Sscanf(weekStr, "%d-%d周(%s)", &weekStart, &weekEnd, &patternStr)
-				// 手动去掉末尾的 ")"
-				patternStr = strings.TrimSuffix(patternStr, ")")
-				if patternStr == "单" {
-					pattern = 1
-				}
-				if patternStr == "双" {
-					pattern = 2
-				}
+			weekMatch := weekPattern.FindStringSubmatch(strings.TrimSpace(weekStr))
+			if weekMatch == nil {
+				return nil, fmt.Errorf("invalid week range %q in %q", weekStr, uniteTime)
+			}
+			weekStart, _ := strconv.Atoi(weekMatch[1])
+			weekEnd := weekStart
+			if weekMatch[2] != "" {
+				weekEnd, _ = strconv.Atoi(weekMatch[2])
+			}
+			if weekStart < 1 || weekEnd > 30 || weekStart > weekEnd {
+				return nil, fmt.Errorf("week range is out of bounds in %q", uniteTime)
 			}
 			for i := weekStart; i <= weekEnd; i++ {
-				if pattern == 0 {
+				if weekMatch[3] == "" {
 					tt.Weeks = append(tt.Weeks, i)
 				}
-				if pattern == 1 {
+				if weekMatch[3] == "单" {
 					if i%2 == 1 {
 						tt.Weeks = append(tt.Weeks, i)
 					}
 				}
-				if pattern == 2 {
+				if weekMatch[3] == "双" {
 					if i%2 == 0 {
 						tt.Weeks = append(tt.Weeks, i)
 					}
 				}
 			}
 		}
+		if len(tt.Weeks) == 0 {
+			return nil, fmt.Errorf("class time %q contains no active weeks", uniteTime)
+		}
 		res = append(res, tt)
-		//fmt.Printf("%+v\n",res)
 	}
-	return res
+	return res, nil
 }

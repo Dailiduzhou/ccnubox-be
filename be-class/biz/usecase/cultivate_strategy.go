@@ -380,10 +380,16 @@ func betterStudiable(s string, stuId string) string {
 
 	// 2024-2025-1
 	if yearTerm := strings.Split(s, "-"); len(yearTerm) == 3 {
+		if len(stuId) < 4 {
+			return s
+		}
 		begin := stuId[:4]
 
-		intYear, _ := strconv.Atoi(yearTerm[0])
-		intBegin, _ := strconv.Atoi(begin)
+		intYear, yearErr := strconv.Atoi(yearTerm[0])
+		intBegin, beginErr := strconv.Atoi(begin)
+		if yearErr != nil || beginErr != nil {
+			return s
+		}
 		yearTermFinal := fmt.Sprintf("%d-%s", intYear-intBegin, yearTerm[2]) //0/1/2/3-1/2/3
 		if v, ok := yearTermMapper[yearTermMapper2[yearTermFinal]]; ok {
 			return v

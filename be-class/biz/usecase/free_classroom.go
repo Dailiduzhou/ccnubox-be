@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/be-class/biz/model"
@@ -34,10 +36,13 @@ const (
 
 type FreeClassRoomData interface {
 	AddClassroomOccupancy(ctx context.Context, year, semester string, cwtPairs ...model.CTWPair) error
+	ReplaceCrawledClassroomOccupancy(ctx context.Context, year, semester string, week int, cwtPairs ...model.CTWPair) error
+	HasCrawledClassroomOccupancy(ctx context.Context, year, semester string, week int) (bool, error)
 	ClearClassroomOccupancy(ctx context.Context, year, semester string) error
 	GetAllClassroom(ctx context.Context, wherePrefix string) ([]string, error)
 	RefreshClassroomOccupancy(ctx context.Context) error
 	QueryAvailableClassrooms(ctx context.Context, year, semester string, week, day, section int, wherePrefix string, allWheres []string) (map[string]bool, error)
+	QueryAvailableClassroomsFromCrawler(ctx context.Context, year, semester string, week, day, section int, wherePrefix string, allWheres []string) (map[string]bool, error)
 }
 
 type ClassData interface {
@@ -56,6 +61,7 @@ type FreeClassroomBiz struct {
 	cache             Cache
 	p                 proxy.Client
 	logger            logger.Logger
+	crawlerRepairs    sync.Map
 }
 
 func NewFreeClassroomBiz(classData ClassData, data FreeClassRoomData, cookieCli CookieClient, lockBuilder lock.Builder, cache Cache, p proxy.Client, l logger.Logger) *FreeClassroomBiz {
@@ -122,12 +128,8 @@ func (f *FreeClassroomBiz) SaveFreeClassRoomFromLocal(ctx context.Context, year,
 			savedAny = true
 			f.logger.Infof("task %v is finished", taskName)
 
-			// 解锁
-			ok, err1 := locker.Unlock()
-			if err1 != nil || !ok {
-				f.logger.Errorf("failed to unlock lock %v: %v", lockKey, err1)
-			} else {
-				f.logger.Infof("unlock %v successfully", lockKey)
+			if err := unlockFreeClassroomSync(locker, lockKey); err != nil {
+				return err
 			}
 
 			// 判断是否已经获取完所有数据
@@ -178,7 +180,11 @@ func (f *FreeClassroomBiz) SaveFreeClassRoomFromLocal(ctx context.Context, year,
 			if err1 != nil {
 				f.logger.Errorf("failed to set cache %v: %v", taskName, err1)
 			}
-			return err
+			syncErr := fmt.Errorf("save classroom occupancy page %d: %w", page, err)
+			if unlockErr := unlockFreeClassroomSync(locker, lockKey); unlockErr != nil {
+				return errors.Join(syncErr, unlockErr)
+			}
+			return syncErr
 		}
 		if len(cwtPairs) > 0 {
 			savedAny = true
@@ -191,11 +197,8 @@ func (f *FreeClassroomBiz) SaveFreeClassRoomFromLocal(ctx context.Context, year,
 		}
 
 		// 解锁
-		ok, err := locker.Unlock()
-		if err != nil || !ok {
-			f.logger.Errorf("failed to unlock lock %v: %v", lockKey, err)
-		} else {
-			f.logger.Infof("unlock %v successfully", lockKey)
+		if err := unlockFreeClassroomSync(locker, lockKey); err != nil {
+			return err
 		}
 
 		// 判断是否已经获取完所有数据
@@ -218,6 +221,21 @@ func (f *FreeClassroomBiz) SaveFreeClassRoomFromLocal(ctx context.Context, year,
 
 func classroomOccupancyReadyKey(year, semester string) string {
 	return fmt.Sprintf("%s:%s:%s", freeClassroomReadyKeyPrefix, year, semester)
+}
+
+func crawledClassroomOccupancyReadyKey(year, semester string, week int) string {
+	return fmt.Sprintf("%s:crawler:%s:%s:%d", freeClassroomReadyKeyPrefix, year, semester, week)
+}
+
+func unlockFreeClassroomSync(locker lock.Locker, lockKey string) error {
+	ok, err := locker.Unlock()
+	if err != nil {
+		return fmt.Errorf("failed to unlock classroom occupancy sync lock %s: %w", lockKey, err)
+	}
+	if !ok {
+		return fmt.Errorf("failed to unlock classroom occupancy sync lock %s: lock was not released", lockKey)
+	}
+	return nil
 }
 
 func (f *FreeClassroomBiz) SaveFreeClassRoomInfo(ctx context.Context, year, semester string, cwtPairs []model.CTWPair) error {
@@ -466,17 +484,42 @@ func toLowerASCII(ch byte) byte {
 }
 
 func (f *FreeClassroomBiz) queryAvailableClassroomFromLocal(ctx context.Context, year, semester string, week, day int, sections []int, wherePrefix string, allWheres []string) (map[string][]bool, error) {
-	status, err := f.cache.Get(ctx, classroomOccupancyReadyKey(year, semester))
-	if err != nil {
-		return nil, fmt.Errorf("failed to check local classroom occupancy readiness: %w", err)
+	useCrawlerData := false
+	crawlerReadyKey := crawledClassroomOccupancyReadyKey(year, semester, week)
+	status, crawlerErr := f.cache.Get(ctx, crawlerReadyKey)
+	if crawlerErr == nil && status == Finished {
+		hasCrawlerData, err := f.freeClassRoomData.HasCrawledClassroomOccupancy(ctx, year, semester, week)
+		if err == nil && hasCrawlerData {
+			useCrawlerData = true
+		} else {
+			if err != nil {
+				f.logger.Warnf("failed to verify crawler occupancy mirror, falling back to classlist data: %v", err)
+			} else {
+				f.logger.Warnf("crawler occupancy mirror is marked ready but contains no data; falling back to classlist data")
+			}
+			if err := f.cache.Del(ctx, crawlerReadyKey); err != nil {
+				f.logger.Warnf("failed to clear stale crawler occupancy readiness: %v", err)
+			}
+		}
 	}
-	if status != Finished {
-		return nil, fmt.Errorf("local classroom occupancy data is not ready for year=%s semester=%s", year, semester)
+	if !useCrawlerData {
+		status, err := f.cache.Get(ctx, classroomOccupancyReadyKey(year, semester))
+		if err != nil || status != Finished {
+			return nil, fmt.Errorf("local classroom occupancy data is not ready for year=%s semester=%s week=%d", year, semester, week)
+		}
 	}
 
 	var classroomStats = make(map[string][]bool)
 	for i, section := range sections {
-		availableClassrooms, err := f.freeClassRoomData.QueryAvailableClassrooms(ctx, year, semester, week, day, section, wherePrefix, allWheres)
+		var (
+			availableClassrooms map[string]bool
+			err                 error
+		)
+		if useCrawlerData {
+			availableClassrooms, err = f.freeClassRoomData.QueryAvailableClassroomsFromCrawler(ctx, year, semester, week, day, section, wherePrefix, allWheres)
+		} else {
+			availableClassrooms, err = f.freeClassRoomData.QueryAvailableClassrooms(ctx, year, semester, week, day, section, wherePrefix, allWheres)
+		}
 		if i == 0 {
 			if err != nil {
 				f.logger.Errorf("failed to query available classrooms at the first section: %v", err)
@@ -510,6 +553,10 @@ func (f *FreeClassroomBiz) getFreeClassrooms(ctx context.Context, year, semester
 	// 先从缓存拿数据
 	freeClassroomCache, err := f.GetFreeClassRoomFromCache(ctx, year, semester, week, campus, day, sections, wherePrefix)
 	if err == nil {
+		status, readyErr := f.cache.Get(ctx, crawledClassroomOccupancyReadyKey(year, semester, week))
+		if readyErr != nil || status != Finished {
+			f.startCrawledClassroomMirrorRepair(year, semester, week)
+		}
 		return freeClassroomCache, nil
 	}
 
@@ -529,7 +576,13 @@ func (f *FreeClassroomBiz) getFreeClassrooms(ctx context.Context, year, semester
 	freeClassroomMp := selectFreeClassrooms(schedule, campus, day, sections, wherePrefix)
 
 	// 新接口一次返回整周数据，复用本次响应异步预热全部缓存。
-	go f.cacheFreeClassroomSchedule(context.Background(), year, semester, week, schedule)
+	go func() {
+		cacheCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := f.cacheFreeClassroomSchedule(cacheCtx, year, semester, week, schedule); err != nil {
+			f.logger.Errorf("failed to persist crawled free classroom schedule: %v", err)
+		}
+	}()
 
 	return freeClassroomMp, nil
 }
@@ -842,10 +895,13 @@ func (f *FreeClassroomBiz) LoadOneWeekFreeClassRoom(ctx context.Context, stuID, 
 		f.logger.Errorf("failed to query weekly free classrooms: %v", err)
 		return
 	}
-	f.cacheFreeClassroomSchedule(ctx, year, semester, week, schedule)
+	if err := f.cacheFreeClassroomSchedule(ctx, year, semester, week, schedule); err != nil {
+		f.logger.Errorf("failed to persist weekly free classrooms: %v", err)
+	}
 }
 
-func (f *FreeClassroomBiz) cacheFreeClassroomSchedule(ctx context.Context, year, semester string, week int, schedule freeClassroomSchedule) {
+func (f *FreeClassroomBiz) cacheFreeClassroomSchedule(ctx context.Context, year, semester string, week int, schedule freeClassroomSchedule) error {
+	var cacheErrs []error
 	for campus := 1; campus <= 2; campus++ {
 		for day := 1; day <= 7; day++ {
 			for section := 1; section <= 12; section++ {
@@ -862,10 +918,152 @@ func (f *FreeClassroomBiz) cacheFreeClassroomSchedule(ctx context.Context, year,
 				cancel()
 				if err != nil {
 					f.logger.Errorf("set free classroom cache failed (key=%s): %v", key, err)
+					cacheErrs = append(cacheErrs, fmt.Errorf("set free classroom cache %s: %w", key, err))
 				}
 			}
 		}
 	}
+	if len(cacheErrs) > 0 {
+		return errors.Join(cacheErrs...)
+	}
+
+	return f.persistCrawledClassroomMirror(ctx, year, semester, week, schedule)
+}
+
+func (f *FreeClassroomBiz) persistCrawledClassroomMirror(ctx context.Context, year, semester string, week int, schedule freeClassroomSchedule) error {
+	allRooms, err := f.freeClassRoomData.GetAllClassroom(ctx, "")
+	if err != nil {
+		return fmt.Errorf("load classroom catalog for crawler mirror: %w", err)
+	}
+	if len(allRooms) == 0 {
+		return fmt.Errorf("classroom catalog for crawler mirror is empty")
+	}
+	cwtPairs := buildCrawledClassroomOccupancy(schedule, week, allRooms)
+	readyKey := crawledClassroomOccupancyReadyKey(year, semester, week)
+	if err := f.cache.Del(ctx, readyKey); err != nil {
+		return fmt.Errorf("clear crawler occupancy readiness before replacement: %w", err)
+	}
+	if err := f.freeClassRoomData.ReplaceCrawledClassroomOccupancy(ctx, year, semester, week, cwtPairs...); err != nil {
+		return fmt.Errorf("replace crawled classroom occupancy: %w", err)
+	}
+	if err := f.cache.Set(ctx, readyKey, Finished, 2*Expire); err != nil {
+		return fmt.Errorf("mark crawled classroom occupancy ready: %w", err)
+	}
+	return nil
+}
+
+func (f *FreeClassroomBiz) startCrawledClassroomMirrorRepair(year, semester string, week int) {
+	key := fmt.Sprintf("%s:%s:%d", year, semester, week)
+	startOnce(&f.crawlerRepairs, key, func() {
+		f.repairCrawledClassroomMirrorFromCache(year, semester, week)
+	})
+}
+
+func startOnce(inFlight *sync.Map, key string, fn func()) bool {
+	if _, loaded := inFlight.LoadOrStore(key, struct{}{}); loaded {
+		return false
+	}
+	go func() {
+		defer inFlight.Delete(key)
+		fn()
+	}()
+	return true
+}
+
+func (f *FreeClassroomBiz) repairCrawledClassroomMirrorFromCache(year, semester string, week int) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	lockKey := fmt.Sprintf("ccnubox_freeClassroom_mirror_lock:%s:%s:%d", year, semester, week)
+	locker := f.lockBuilder.BuildWithExpire(lockKey, 2*time.Minute)
+	if err := locker.Lock(); err != nil {
+		return
+	}
+	defer func() {
+		if ok, err := locker.Unlock(); err != nil || !ok {
+			f.logger.Errorf("failed to unlock crawler mirror repair %s: %v", lockKey, err)
+		}
+	}()
+
+	status, err := f.cache.Get(ctx, crawledClassroomOccupancyReadyKey(year, semester, week))
+	if err == nil && status == Finished {
+		return
+	}
+	schedule, err := f.loadFreeClassroomScheduleFromCache(ctx, year, semester, week)
+	if err != nil {
+		f.logger.Errorf("failed to load cached free classroom schedule for ES repair: %v", err)
+		return
+	}
+	if err := f.persistCrawledClassroomMirror(ctx, year, semester, week, schedule); err != nil {
+		f.logger.Errorf("failed to repair crawled classroom ES mirror: %v", err)
+	}
+}
+
+func (f *FreeClassroomBiz) loadFreeClassroomScheduleFromCache(ctx context.Context, year, semester string, week int) (freeClassroomSchedule, error) {
+	schedule := newFreeClassroomSchedule()
+	for campus := 1; campus <= 2; campus++ {
+		for day := 1; day <= 7; day++ {
+			for section := 1; section <= 12; section++ {
+				key := fmt.Sprintf("%s:%s:%s:%d:%d:%d:%d", FreeClassRoomCacheKeyPrefix, year, semester, week, campus, day, section)
+				raw, err := f.cache.Get(ctx, key)
+				if err != nil {
+					return nil, fmt.Errorf("get cache %s: %w", key, err)
+				}
+				var rooms []string
+				if err := json.Unmarshal([]byte(raw), &rooms); err != nil || rooms == nil {
+					return nil, fmt.Errorf("invalid cached classroom list for %s", key)
+				}
+				schedule[day][section] = append(schedule[day][section], rooms...)
+			}
+		}
+	}
+	return schedule, nil
+}
+
+func buildCrawledClassroomOccupancy(schedule freeClassroomSchedule, week int, allRooms []string) []model.CTWPair {
+	roomSet := make(map[string]struct{}, len(allRooms))
+	for _, room := range allRooms {
+		room = strings.TrimSpace(room)
+		if room != "" {
+			roomSet[room] = struct{}{}
+		}
+	}
+
+	occupiedSections := make(map[string]map[int][]int, len(roomSet))
+	for day := 1; day <= 7; day++ {
+		for section := 1; section <= 12; section++ {
+			freeRooms := make(map[string]struct{}, len(schedule[day][section]))
+			for _, room := range schedule[day][section] {
+				freeRooms[room] = struct{}{}
+			}
+			for room := range roomSet {
+				if _, free := freeRooms[room]; free {
+					continue
+				}
+				if occupiedSections[room] == nil {
+					occupiedSections[room] = make(map[int][]int)
+				}
+				occupiedSections[room][day] = append(occupiedSections[room][day], section)
+			}
+		}
+	}
+
+	pairs := make([]model.CTWPair, 0, len(occupiedSections)*7)
+	for room, days := range occupiedSections {
+		for day, sections := range days {
+			pairs = append(pairs, model.CTWPair{
+				CT:    model.CTime{Day: day, Sections: sections, Weeks: []int{week}},
+				Where: room,
+			})
+		}
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].Where == pairs[j].Where {
+			return pairs[i].CT.Day < pairs[j].CT.Day
+		}
+		return naturalLess(pairs[i].Where, pairs[j].Where)
+	})
+	return pairs
 }
 
 //type JSONData struct {
