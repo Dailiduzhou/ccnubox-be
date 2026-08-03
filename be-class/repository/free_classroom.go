@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	freeClassroomIndex        = "ccnubox-free_classroom"
-	freeClassroomCrawlerIndex = "ccnubox-free_classroom_crawler"
+	freeClassroomIndex = "ccnubox-free_classroom"
+	// The ccnubox-* namespace is owned by Filebeat's data-stream template.
+	// Application-managed indices must stay outside it or Elasticsearch will
+	// reject CreateIndex with "use create data stream api instead".
+	freeClassroomCrawlerIndex = "be-class-free-classroom-crawler"
 	freeClassroomMapping      = `{
 	"mappings": {
 		"properties": {
