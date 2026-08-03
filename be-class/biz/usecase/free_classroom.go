@@ -8,6 +8,7 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -956,15 +957,22 @@ func (f *FreeClassroomBiz) startCrawledClassroomMirrorRepair(year, semester stri
 	key := fmt.Sprintf("%s:%s:%d", year, semester, week)
 	startOnce(&f.crawlerRepairs, key, func() {
 		f.repairCrawledClassroomMirrorFromCache(year, semester, week)
+	}, func(recovered any) {
+		f.logger.Errorf("crawler mirror repair panicked (year=%s semester=%s week=%d): %v\n%s", year, semester, week, recovered, debug.Stack())
 	})
 }
 
-func startOnce(inFlight *sync.Map, key string, fn func()) bool {
+func startOnce(inFlight *sync.Map, key string, fn func(), onPanic func(any)) bool {
 	if _, loaded := inFlight.LoadOrStore(key, struct{}{}); loaded {
 		return false
 	}
 	go func() {
 		defer inFlight.Delete(key)
+		defer func() {
+			if recovered := recover(); recovered != nil && onPanic != nil {
+				onPanic(recovered)
+			}
+		}()
 		fn()
 	}()
 	return true

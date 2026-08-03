@@ -440,12 +440,12 @@ func TestStartOnceDeduplicatesConcurrentWork(t *testing.T) {
 		close(started)
 		<-release
 		close(finished)
-	}) {
+	}, nil) {
 		t.Fatal("expected first repair to start")
 	}
 	<-started
 	for i := 0; i < 20; i++ {
-		if startOnce(&inFlight, "2025:3:3", func() { calls++ }) {
+		if startOnce(&inFlight, "2025:3:3", func() { calls++ }, nil) {
 			t.Fatal("expected duplicate repair to be suppressed")
 		}
 	}
@@ -470,12 +470,54 @@ func TestStartOnceDeduplicatesConcurrentWork(t *testing.T) {
 	if !startOnce(&inFlight, "2025:3:3", func() {
 		calls++
 		close(secondFinished)
-	}) {
+	}, nil) {
 		t.Fatal("expected a later repair to start after the first completed")
 	}
 	<-secondFinished
 	if calls != 2 {
 		t.Fatalf("expected two sequential repairs, got %d", calls)
+	}
+}
+
+func TestStartOnceRecoversPanicAndReleasesKey(t *testing.T) {
+	var inFlight sync.Map
+	panicValue := make(chan any, 1)
+	if !startOnce(&inFlight, "2025:3:3", func() {
+		panic("broken cached schedule")
+	}, func(recovered any) {
+		panicValue <- recovered
+	}) {
+		t.Fatal("expected repair to start")
+	}
+
+	select {
+	case recovered := <-panicValue:
+		if recovered != "broken cached schedule" {
+			t.Fatalf("unexpected recovered panic: %v", recovered)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background panic was not recovered")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, loaded := inFlight.Load("2025:3:3"); !loaded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("repair key was not released after panic")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	completed := make(chan struct{})
+	if !startOnce(&inFlight, "2025:3:3", func() { close(completed) }, nil) {
+		t.Fatal("expected a later repair to start after panic recovery")
+	}
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("later repair did not run")
 	}
 }
 
