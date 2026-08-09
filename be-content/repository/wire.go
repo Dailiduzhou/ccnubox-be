@@ -36,8 +36,17 @@ func NewDepartmentRepo(db *gorm.DB, cmd redis.Cmdable, l logger.Logger) ContentR
 	return NewRepo[model.Department](db, cmd, l)
 }
 
-func NewCalendarRepo(db *gorm.DB, cmd redis.Cmdable, l logger.Logger) ContentRepo[model.Calendar] {
-	return NewRepo[model.Calendar](db, cmd, l)
+func NewCalendarRepo(db *gorm.DB, cmd redis.Cmdable, l logger.Logger) CalendarRepo {
+	c := cache.NewRedisCache[model.Calendar](cmd)
+	d := dao.NewGormDAO[model.Calendar](db)
+	return &calendarRepository{
+		Repository: &Repository[model.Calendar]{
+			dao:   d,
+			cache: c,
+			l:     l,
+		},
+		db: db,
+	}
 }
 
 func NewVersionRepo(db *gorm.DB, cmd redis.Cmdable, l logger.Logger) ContentRepo[model.Version] {

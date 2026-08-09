@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 
 	"github.com/asynccnu/ccnubox-be/be-content/domain"
 	"github.com/asynccnu/ccnubox-be/be-content/repository"
@@ -30,11 +32,11 @@ type CalendarService interface {
 }
 
 type calendarService struct {
-	repo repository.ContentRepo[model.Calendar]
+	repo repository.CalendarRepo
 	l    logger.Logger
 }
 
-func NewCalendarService(repo repository.ContentRepo[model.Calendar], l logger.Logger) CalendarService {
+func NewCalendarService(repo repository.CalendarRepo, l logger.Logger) CalendarService {
 	return &calendarService{
 		repo: repo,
 		l:    l,
@@ -65,21 +67,14 @@ func (s *calendarService) Get(ctx context.Context, year int64) (*domain.Calendar
 
 // Save 保存或更新校历
 func (s *calendarService) Save(ctx context.Context, cal *domain.Calendar) error {
-	// 1. 尝试获取现有数据，处理 Upsert 逻辑
-	m, err := s.repo.Get(ctx, "year", cal.Year)
-	if err != nil && !errors.Is(err, repository.ErrRecordNotFound) {
-		return SAVE_CALENDAR_ERROR(errorx.Errorf("保存前查询旧校历(year=%d)失败: %w", cal.Year, err))
+	link := strings.TrimSpace(cal.Link)
+	u, err := url.Parse(link)
+	if err != nil || u.Hostname() == "" ||
+		(!strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https")) {
+		return SAVE_CALENDAR_ERROR(errorx.Errorf("无效的校历链接: %q", cal.Link))
 	}
 
-	// 2. 如果没找到旧数据，初始化新对象
-	if m == nil {
-		m = &model.Calendar{Year: cal.Year}
-	}
-
-	m.Link = cal.Link
-
-	// 3. 调用 Repo 保存
-	if err := s.repo.Save(ctx, m); err != nil {
+	if err := s.repo.Upsert(ctx, &model.Calendar{Year: cal.Year, Link: link}); err != nil {
 		return SAVE_CALENDAR_ERROR(errorx.Errorf("执行校历(year=%d)保存操作失败: %w", cal.Year, err))
 	}
 	return nil
