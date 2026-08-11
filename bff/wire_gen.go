@@ -59,7 +59,7 @@ func InitApp() *App {
 	refreshHandler := cron.NewTieredHandler(classerClient, gradeServiceClient, feedServiceClient, contentServiceClient, counterServiceClient, logger)
 	redsync := ioc.InitRedisLock(client)
 	tieredScheduler := ioc.InitScheduler(serverConf, refreshHandler, counterServiceClient, logger, redsync)
-	manager := ioc.InitCronxManager(logger, metrics, cmdable, redsync)
+	manager := ioc.InitCronxManager(logger, metrics, cmdable)
 	app := NewApp(engine, serverConf, v2, tieredScheduler, manager)
 	return app
 }
