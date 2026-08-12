@@ -39,60 +39,38 @@ func (m *PrometheusMiddleware) MiddlewareFunc() gin.HandlerFunc {
 		m.metrics.HTTP.ActiveConnections.WithLabelValues(path).Inc()
 
 		defer func() {
-			// 向 redis 存入学号数据
+			// Record authenticated users in the current 15-minute HLL bucket.
 			uc, _ := ginx.GetClaims[ijwt.UserClaims](ctx)
-			StudentId := uc.StudentId
-			if StudentId != "" {
-				// 存入redis进行聚合数据处理日活数据
-				// 这里将每个键分为15min的桶，实现精度较高的滑动窗口
-				go func(studentId string) {
-					// DAU 聚合是 best-effort, 失败会通过下面的 InstrumentedRedis 记录到
-					// ccnubox_redis_errors_total{operation="PFADD"|"EXPIRE"} 指标里。
-					// 告警建议: rate(ccnubox_redis_errors_total{operation=~"PFADD|EXPIRE"}[5m]) > 0
+			studentID := uc.StudentId
+			if studentID != "" {
+				go func(studentID string) {
+					// Collection is best-effort. Redis failures are observable through
+					// ccnubox_redis_errors_total{operation="PFADD"|"EXPIRE"}.
 					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					defer cancel()
 
-					_ = m.recordDAU(ctx, studentId, time.Now())
-				}(StudentId)
+					_ = m.recordActiveUser(ctx, studentID, time.Now())
+				}(studentID)
 			}
 
-			// 记录响应信息
 			status := ctx.Writer.Status()
 			m.metrics.HTTP.ActiveConnections.WithLabelValues(path).Dec()
 			m.metrics.HTTP.RequestsTotal.WithLabelValues(ctx.Request.Method, path, http.StatusText(status)).Inc()
 			m.metrics.HTTP.Duration.WithLabelValues(path, http.StatusText(status)).Observe(time.Since(start).Seconds())
 		}()
 
-		ctx.Next() // 执行后续逻辑
+		ctx.Next()
 	}
 }
 
-func (m *PrometheusMiddleware) recordDAU(ctx context.Context, studentId string, now time.Time) error {
-	if studentId == "" {
+func (m *PrometheusMiddleware) recordActiveUser(ctx context.Context, studentID string, now time.Time) error {
+	if studentID == "" {
 		return nil
 	}
 
-	bucketKey := cron.DAUBucketKey(now)
-	dayKey := cron.DAUDayKeyForTime(now)
-	ttl := 30*24*time.Hour + time.Hour
-
-	if err := m.redisClient.PFAdd(ctx, bucketKey, studentId).Err(); err != nil {
+	bucketKey := cron.ActiveUsersBucketKey(now)
+	if err := m.redisClient.PFAdd(ctx, bucketKey, studentID).Err(); err != nil {
 		return err
 	}
-	if err := m.redisClient.Expire(ctx, bucketKey, ttl).Err(); err != nil {
-		return err
-	}
-	if err := m.redisClient.PFAdd(ctx, dayKey, studentId).Err(); err != nil {
-		return err
-	}
-	count, err := m.redisClient.PFCount(ctx, dayKey).Result()
-	if err != nil {
-		return err
-	}
-	if err := m.redisClient.Expire(ctx, dayKey, ttl).Err(); err != nil {
-		return err
-	}
-
-	m.metrics.User.DAU.Set(float64(count))
-	return nil
+	return m.redisClient.Expire(ctx, bucketKey, cron.ActiveUsersBucketTTL()).Err()
 }

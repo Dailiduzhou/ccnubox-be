@@ -63,10 +63,10 @@ type OssConf struct {
 //		Help string `yaml:"help"`
 //	} `yaml:"durationTime"`
 //
-//	DailyActiveUsers struct {
+//	ActiveUsers24h struct {
 //		Name string `yaml:"name"`
 //		Help string `yaml:"help"`
-//	} `yaml:"dailyActiveUsers"`
+//	} `yaml:"activeUsers24h"`
 //}
 
 type BasicAuthConf struct {

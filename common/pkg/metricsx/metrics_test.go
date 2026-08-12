@@ -50,12 +50,11 @@ func TestNewWithRegistererInitializesUserMetrics(t *testing.T) {
 	if m.User == nil {
 		t.Fatal("expected User metrics to be initialized")
 	}
-	if m.User.DAU == nil {
-		t.Fatal("expected User.DAU gauge to be initialized")
+	if m.User.ActiveUsers24h == nil {
+		t.Fatal("expected User.ActiveUsers24h gauge to be initialized")
 	}
-	// FQDN 形如 "ccnubox_test_dau", namespace 与子系统名用下划线拼接
-	got := m.User.DAU.Desc().String()
-	if !strings.Contains(got, "ccnubox_test_dau") {
-		t.Fatalf("expected desc to contain 'ccnubox_test_dau', got: %s", got)
+	got := m.User.ActiveUsers24h.Desc().String()
+	if !strings.Contains(got, "ccnubox_test_active_users_24h") {
+		t.Fatalf("expected desc to contain 'ccnubox_test_active_users_24h', got: %s", got)
 	}
 }

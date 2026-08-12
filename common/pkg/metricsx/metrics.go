@@ -39,7 +39,7 @@ func NewWithRegisterer(reg prometheus.Registerer, namespace string) *Metrics {
 	m.MQMetrics.ProducedTotal = registerVec(reg, m.MQMetrics.ProducedTotal)
 	m.MQMetrics.ConsumedTotal = registerVec(reg, m.MQMetrics.ConsumedTotal)
 	m.MQMetrics.FailedTotal = registerVec(reg, m.MQMetrics.FailedTotal)
-	m.User.DAU = registerVec(reg, m.User.DAU)
+	m.User.ActiveUsers24h = registerVec(reg, m.User.ActiveUsers24h)
 
 	return m
 }
