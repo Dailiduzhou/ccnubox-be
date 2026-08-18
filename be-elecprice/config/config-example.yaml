@@ -30,6 +30,14 @@ registry:
 elecpriceController:
   durationTime: 24  # 检查周期(小时)
 
+# JNB 能源易支付平台 V2 接口配置(必填, 缺失将启动失败; 真实凭据由 Nacos 提供, 勿提交到仓库)
+jnb:
+  baseUrl: ""
+  sysId: ""
+  accountId: ""
+  accountPass: ""
+  sm2PublicKey: ""
+
 log:
   path: "/logs/app.log"
   maxSize: 100
