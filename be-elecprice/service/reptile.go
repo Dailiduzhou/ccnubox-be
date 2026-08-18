@@ -2,82 +2,12 @@ package service
 
 import (
 	"context"
-	"encoding/xml"
-	"errors"
-	"fmt"
-	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/asynccnu/ccnubox-be/be-elecprice/crawler"
 	"github.com/asynccnu/ccnubox-be/be-elecprice/domain"
-	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
-	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 )
-
-// 通用 HTTP 请求函数
-func sendRequest(pc proxy.Client, url string) (string, error) {
-	var (
-		resp *http.Response
-		err  error
-	)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("Referer", "https://jnb.ccnu.edu.cn/MobileWebPayStandard_Vue/")
-	req.Header.Set("Host", "jnb.ccnu.edu.cn")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0")
-
-	resp, err = pc.NewProxyClient(proxy.WithProxyTransport()).Do(req)
-	if err != nil {
-		return "", fmt.Errorf("发送请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("服务器返回错误状态码: %d", resp.StatusCode)
-	}
-
-	body, err := httpx.ReadResponse(resp, httpx.WithMaxBodyBytes(1<<20))
-	if err != nil {
-		return "", fmt.Errorf("读取响应体失败: %w", err)
-	}
-
-	return string(body), nil
-}
-
-// 匹配正则工具
-func matchRegex(input, pattern string) (map[string]string, error) {
-	re := regexp.MustCompile(pattern)
-	matches := re.FindAllStringSubmatch(input, -1)
-	if matches == nil {
-		return nil, errors.New("未匹配到结果")
-	}
-	res := make(map[string]string)
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		//"xx":"123"
-		res[match[1]] = match[2]
-	}
-	return res, nil
-}
-
-func matchRegexpOneEle(input, pattern string) (string, error) {
-	re := regexp.MustCompile(pattern)
-	matches := re.FindStringSubmatch(input)
-	if matches == nil {
-		return "", errors.New("未匹配到结果")
-	}
-	if len(matches) < 2 {
-		return "", errors.New("未匹配到结果")
-	}
-	return matches[1], nil
-}
 
 // merge 111空调(id1), 111照明(id2) -> 111[id1,id2], 222(id3) -> 222[id3] //map[id]name
 func mergeRoomIds(m map[string]string) domain.RoomInfoList {
@@ -201,12 +131,12 @@ func isBlackListed(name string) bool {
 }
 
 // handleDirtyArch 处理一下学校拉的屎, 楼层显示不对, 宿舍楼栋不匹配
-func handleDirtyArch(ctx context.Context, res *domain.ResultArchitectureInfo, name string, pc proxy.Client) {
+func handleDirtyArch(ctx context.Context, res *domain.ResultArchitectureInfo, name string, jnb crawler.JnbClient) {
 	switch name {
 	case YuanBaoShan:
 		removeDong23(res)
 	case EastRegion:
-		addDong23(ctx, res, pc)
+		addDong23(ctx, res, jnb)
 	case SouthEast:
 		adjustFloor(res)
 	}
@@ -224,30 +154,23 @@ func removeDong23(res *domain.ResultArchitectureInfo) {
 	res.ArchitectureInfoList.ArchitectureInfo = list[:i]
 }
 
-func addDong23(ctx context.Context, res *domain.ResultArchitectureInfo, pc proxy.Client) {
-	body, err := sendRequest(pc, fmt.Sprintf("https://jnb.ccnu.edu.cn/ICBS/PurchaseWebService.asmx/getArchitectureInfo?Area_ID=%s", ConstantMap[YuanBaoShan]))
+func addDong23(ctx context.Context, res *domain.ResultArchitectureInfo, jnb crawler.JnbClient) {
+	list, err := jnb.GetArchitectureInfo(ctx, ConstantMap[YuanBaoShan])
 	if err != nil {
 		return
 	}
-	var result domain.ResultArchitectureInfo
 
-	if err = xml.Unmarshal([]byte(body), &result); err != nil {
-		return
-	}
-
-	if d23 := extractDong23(&result.ArchitectureInfoList); d23 != nil {
-		res.ArchitectureInfoList.ArchitectureInfo = append(res.ArchitectureInfoList.ArchitectureInfo, *d23)
-	}
-}
-
-func extractDong23(list *domain.ArchitectureInfoList) *domain.Architecture {
-	for i := range list.ArchitectureInfo {
-		arch := &list.ArchitectureInfo[i]
-		if strings.Contains(arch.ArchitectureName, Dong23) {
-			return arch
+	for _, a := range list {
+		if strings.Contains(a.ArchitectureName, Dong23) {
+			res.ArchitectureInfoList.ArchitectureInfo = append(res.ArchitectureInfoList.ArchitectureInfo, domain.Architecture{
+				ArchitectureID:     a.ArchitectureID,
+				ArchitectureName:   a.ArchitectureName,
+				ArchitectureStorys: strconv.Itoa(a.ArchitectureStorys),
+				ArchitectureBegin:  strconv.Itoa(a.ArchitectureBegin),
+			})
+			return
 		}
 	}
-	return nil
 }
 
 func adjustFloor(res *domain.ResultArchitectureInfo) {

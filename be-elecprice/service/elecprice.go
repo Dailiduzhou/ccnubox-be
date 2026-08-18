@@ -2,14 +2,12 @@ package service
 
 import (
 	"context"
-	"encoding/xml"
-	"fmt"
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
-	"net/url"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/asynccnu/ccnubox-be/be-elecprice/crawler"
 	"github.com/asynccnu/ccnubox-be/be-elecprice/domain"
 	"github.com/asynccnu/ccnubox-be/be-elecprice/repository/cache"
 	"github.com/asynccnu/ccnubox-be/be-elecprice/repository/dao"
@@ -45,11 +43,12 @@ type elecpriceService struct {
 	Proxy        proxy.Client
 	cache        cache.ElecPriceCache
 	l            logger.Logger
+	jnb          crawler.JnbClient
 }
 
 func NewElecpriceService(elecpriceDAO dao.ElecpriceDAO, l logger.Logger, c cache.ElecPriceCache,
-	proxy proxy.Client) ElecpriceService {
-	return &elecpriceService{elecpriceDAO: elecpriceDAO, l: l, Proxy: proxy, cache: c}
+	proxy proxy.Client, jnb crawler.JnbClient) ElecpriceService {
+	return &elecpriceService{elecpriceDAO: elecpriceDAO, l: l, Proxy: proxy, cache: c, jnb: jnb}
 }
 
 func (s *elecpriceService) SetStandard(ctx context.Context, r *domain.SetStandardRequest) error {
@@ -177,17 +176,21 @@ func (s *elecpriceService) GetArchitecture(ctx context.Context, area string) (do
 	}
 
 	// 2. 爬取数据
-	apiURL := fmt.Sprintf("https://jnb.ccnu.edu.cn/ICBS/PurchaseWebService.asmx/getArchitectureInfo?Area_ID=%s", code)
-	body, err := sendRequest(s.Proxy, apiURL)
+	list, err := s.jnb.GetArchitectureInfo(ctx, code)
 	if err != nil {
 		return domain.ResultArchitectureInfo{}, INTERNET_ERROR(errorx.Errorf("service: request architecture info failed, area: %s, err: %w", area, err))
 	}
 
-	if err = xml.Unmarshal([]byte(body), &resp); err != nil {
-		return domain.ResultArchitectureInfo{}, INTERNET_ERROR(errorx.Errorf("service: unmarshal architecture xml failed, area: %s, body: %s, err: %w", area, body, err))
+	for _, a := range list {
+		resp.ArchitectureInfoList.ArchitectureInfo = append(resp.ArchitectureInfoList.ArchitectureInfo, domain.Architecture{
+			ArchitectureID:     a.ArchitectureID,
+			ArchitectureName:   a.ArchitectureName,
+			ArchitectureStorys: strconv.Itoa(a.ArchitectureStorys),
+			ArchitectureBegin:  strconv.Itoa(a.ArchitectureBegin),
+		})
 	}
 
-	handleDirtyArch(ctx, &resp, area, s.Proxy)
+	handleDirtyArch(ctx, &resp, area, s.jnb)
 
 	// 3. 异步回填缓存
 	go func() {
@@ -212,15 +215,14 @@ func (s *elecpriceService) GetRoomInfo(ctx context.Context, archiID string, floo
 	}
 
 	// 2. 爬取
-	apiURL := fmt.Sprintf("https://jnb.ccnu.edu.cn/ICBS/PurchaseWebService.asmx/getRoomInfo?Architecture_ID=%s&Floor=%s", archiID, floor)
-	body, err := sendRequest(s.Proxy, apiURL)
+	list, err := s.jnb.GetRoomInfo(ctx, archiID, floor)
 	if err != nil {
 		return resp, INTERNET_ERROR(errorx.Errorf("service: request room info failed, archiID: %s, floor: %s, err: %w", archiID, floor, err))
 	}
 
-	res, err := matchRegex(body, roomInfoReg)
-	if err != nil {
-		return resp, INTERNET_ERROR(errorx.Errorf("service: match room regex failed, body: %s, err: %w", body, err))
+	res := make(map[string]string, len(list))
+	for _, r := range list {
+		res[r.RoomNo] = r.RoomName
 	}
 
 	res = filter(res)
@@ -323,16 +325,15 @@ func (s *elecpriceService) GetMeterID(ctx context.Context, RoomID string) (strin
 	// 其他错误（包括 ErrValeEmptyOrNil 和 ErrKeyNotExists）都继续走远程请求
 
 	// 2. 远程请求
-	apiURL := fmt.Sprintf("https://jnb.ccnu.edu.cn/ICBS/PurchaseWebService.asmx/getRoomMeterInfo?Room_ID=%s", RoomID)
-	body, err := sendRequest(s.Proxy, apiURL)
+	info, err := s.jnb.GetRoomMeterInfo(ctx, RoomID)
 	if err != nil {
 		return "", INTERNET_ERROR(errorx.Errorf("service: request meter id failed, rid: %s, err: %w", RoomID, err))
 	}
 
-	id, err := matchRegexpOneEle(body, meterIdReg)
-	if err != nil {
-		return "", INTERNET_ERROR(errorx.Errorf("service: parse meter id regex failed, rid: %s, body: %s, err: %w", RoomID, body, err))
+	if len(info.MeterList) == 0 {
+		return "", INTERNET_ERROR(errorx.Errorf("service: meter list empty, rid: %s", RoomID))
 	}
+	id := info.MeterList[0].MeterId
 
 	// 3. 异步写缓存
 	go func() {
@@ -347,44 +348,21 @@ func (s *elecpriceService) GetMeterID(ctx context.Context, RoomID string) (strin
 }
 
 func (s *elecpriceService) GetFinalInfo(ctx context.Context, meterID string) (*domain.PriceInfo, error) {
-	var (
-		remain struct{ RemainMoney string }
-		dayUse struct {
-			DayUseMoney string
-			DayUseValue string
-		}
-	)
-
-	apiURL := fmt.Sprintf("https://jnb.ccnu.edu.cn/ICBS/PurchaseWebService.asmx/getReserveHKAM?AmMeter_ID=%s", meterID)
-	body, err_ := sendRequest(s.Proxy, apiURL)
-	if err_ != nil {
-		return nil, INTERNET_ERROR(errorx.Errorf("service: request reserve HKAM failed, mid: %s, err: %w", meterID, err_))
-	}
-	remain.RemainMoney, err_ = matchRegexpOneEle(body, remainPowerReg)
-	if err_ != nil {
-		return nil, INTERNET_ERROR(errorx.Errorf("service: parse remain money failed, mid: %s, body: %s, err: %w", meterID, body, err_))
+	reserve, err := s.jnb.GetReserve(ctx, meterID)
+	if err != nil {
+		return nil, INTERNET_ERROR(errorx.Errorf("service: request reserve failed, mid: %s, err: %w", meterID, err))
 	}
 
-	encodedDate := url.QueryEscape(time.Now().AddDate(0, 0, -1).Format("2006/1/2"))
-	apiURL = fmt.Sprintf("https://jnb.ccnu.edu.cn/ICBS/PurchaseWebService.asmx/getMeterDayValue?AmMeter_ID=%s&startDate=%s&endDate=%s", meterID, encodedDate, encodedDate)
-	body, err := sendRequest(s.Proxy, apiURL)
+	date := time.Now().AddDate(0, 0, -1).Format("2006-1-2")
+	dayUse, err := s.jnb.GetMeterDayValue(ctx, meterID, date)
 	if err != nil {
-		return nil, INTERNET_ERROR(errorx.Errorf("service: request meter day value failed, mid: %s, date: %s, err: %w", meterID, encodedDate, err))
-	}
-
-	dayUse.DayUseValue, err = matchRegexpOneEle(body, dayValueReg)
-	if err != nil {
-		return nil, INTERNET_ERROR(errorx.Errorf("service: parse day use value failed, mid: %s, body: %s, err: %w", meterID, body, err))
-	}
-	dayUse.DayUseMoney, err = matchRegexpOneEle(body, dayUseMeonyReg)
-	if err != nil {
-		return nil, INTERNET_ERROR(errorx.Errorf("service: parse day use money failed, mid: %s, body: %s, err: %w", meterID, body, err))
+		return nil, INTERNET_ERROR(errorx.Errorf("service: request meter day value failed, mid: %s, date: %s, err: %w", meterID, date, err))
 	}
 
 	return &domain.PriceInfo{
-		RemainMoney:       remain.RemainMoney,
-		YesterdayUseMoney: dayUse.DayUseMoney,
-		YesterdayUseValue: dayUse.DayUseValue,
+		RemainMoney:       reserve.RemainPower,
+		YesterdayUseMoney: dayUse.DayUseMeony,
+		YesterdayUseValue: dayUse.DayValue,
 	}, nil
 }
 

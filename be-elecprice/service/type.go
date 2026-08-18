@@ -2,12 +2,6 @@ package service
 
 const (
 	ProxyAddr = "proxyAddr"
-
-	roomInfoReg    = `<RoomNo>(\d+)</RoomNo>\s*<RoomName>(.*?)</RoomName>`
-	meterIdReg     = `<meterId>(.*?)</meterId>`
-	remainPowerReg = `<remainPower>(.*?)</remainPower>`
-	dayValueReg    = `<dayValue>(.*?)</dayValue>`
-	dayUseMeonyReg = `<dayUseMeony>(.*?)</dayUseMeony>`
 )
 
 const (

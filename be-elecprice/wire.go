@@ -27,6 +27,7 @@ func InitApp() *App {
 		ioc.InitEtcdClient,
 		ioc.InitProxyClient,
 		ioc.InitHttpProxyClient,
+		ioc.InitJnbClient,
 		ioc.InitDB,
 		ioc.InitLogger,
 		ioc.InitGRPCxKratosServer,
