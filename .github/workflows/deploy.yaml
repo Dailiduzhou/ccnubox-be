@@ -132,6 +132,8 @@ jobs:
           context: .
           file: ./${{ matrix.service }}/Dockerfile
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/ccnubox-${{ matrix.service }}:${{ needs.changes.outputs.version }}
           build-args: ${{ matrix.service == 'be-user' && format('KEY={0}', secrets.CRYPTO_KEY) || '' }}
 
