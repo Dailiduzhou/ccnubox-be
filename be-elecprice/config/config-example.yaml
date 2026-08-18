@@ -30,6 +30,14 @@ registry:
 elecpriceController:
   durationTime: 24  # 检查周期(小时)
 
+# JNB 能源易支付平台 V2 接口配置(可选, 缺省使用内置默认值)
+jnb:
+  baseUrl: "https://jnb.ccnu.edu.cn/ICBS_V2_Server"
+  sysId: "999"
+  accountId: "ph"
+  accountPass: "phAPI"
+  sm2PublicKey: "04b238b7d42c87a25e1a4eaddca81e8f33fd95773ccd471408e4195db62aa4085f6e0a3b695cad8d60acece1af348f534b7f72d312f2966b144248c9c590c930fc"
+
 log:
   path: "/logs/app.log"
   maxSize: 100
