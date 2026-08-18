@@ -1,6 +1,10 @@
 package conf
 
 import (
+	"fmt"
+	"log"
+	"strings"
+
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/conf"
 )
 
@@ -24,7 +28,7 @@ type ElecPriceConf struct {
 	DurationTime int `yaml:"durationTime"`
 }
 
-// JnbConf JNB 能源易支付平台 V2 接口配置
+// JnbConf JNB 能源易支付平台 V2 接口配置, 全部字段必填, 由 Nacos 或本地配置文件提供
 type JnbConf struct {
 	BaseUrl      string `yaml:"baseUrl"`
 	SysId        string `yaml:"sysId"`
@@ -33,38 +37,39 @@ type JnbConf struct {
 	Sm2PublicKey string `yaml:"sm2PublicKey"`
 }
 
-// Default 返回带默认值的配置, 未配置的项使用生产默认值
-func (c *JnbConf) Default() *JnbConf {
-	res := &JnbConf{
-		BaseUrl:      "https://jnb.ccnu.edu.cn/ICBS_V2_Server",
-		SysId:        "999",
-		AccountId:    "ph",
-		AccountPass:  "phAPI",
-		Sm2PublicKey: "04b238b7d42c87a25e1a4eaddca81e8f33fd95773ccd471408e4195db62aa4085f6e0a3b695cad8d60acece1af348f534b7f72d312f2966b144248c9c590c930fc",
-	}
+// Validate 校验配置完整性, 缺失必填字段时返回错误
+func (c *JnbConf) Validate() error {
 	if c == nil {
-		return res
+		return fmt.Errorf("conf: jnb 配置缺失, 请在 Nacos 或本地配置文件中提供 jnb 段")
 	}
-	if c.BaseUrl != "" {
-		res.BaseUrl = c.BaseUrl
+	var missing []string
+	if c.BaseUrl == "" {
+		missing = append(missing, "baseUrl")
 	}
-	if c.SysId != "" {
-		res.SysId = c.SysId
+	if c.SysId == "" {
+		missing = append(missing, "sysId")
 	}
-	if c.AccountId != "" {
-		res.AccountId = c.AccountId
+	if c.AccountId == "" {
+		missing = append(missing, "accountId")
 	}
-	if c.AccountPass != "" {
-		res.AccountPass = c.AccountPass
+	if c.AccountPass == "" {
+		missing = append(missing, "accountPass")
 	}
-	if c.Sm2PublicKey != "" {
-		res.Sm2PublicKey = c.Sm2PublicKey
+	if c.Sm2PublicKey == "" {
+		missing = append(missing, "sm2PublicKey")
 	}
-	return res
+	if len(missing) > 0 {
+		return fmt.Errorf("conf: jnb 配置缺少必填字段: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func InitServerConf() *ServerConf {
-	return conf.InitConfig[ServerConf](ServerEnv)
+	cfg := conf.InitConfig[ServerConf](ServerEnv)
+	if err := cfg.Jnb.Validate(); err != nil {
+		log.Fatalf("初始化服务配置失败: %v", err)
+	}
+	return cfg
 }
 
 func InitInfraConfig() *InfraConf {

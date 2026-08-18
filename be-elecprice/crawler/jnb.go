@@ -84,7 +84,7 @@ type jnbClient struct {
 }
 
 func NewJnbClient(pc proxy.Client, l logger.Logger, cfg *conf.JnbConf) JnbClient {
-	return &jnbClient{cfg: cfg.Default(), pc: pc, l: l}
+	return &jnbClient{cfg: cfg, pc: pc, l: l}
 }
 
 // token 获取可用 access_Jwt, 过期前十分钟提前刷新
