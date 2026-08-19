@@ -25,7 +25,7 @@ func (c ClassInfoDAO) SaveClassInfosToDB(ctx context.Context, classInfos []*mode
 		return nil
 	}
 
-	db := c.GetDB(ctx).Table(model.ClassInfoTableName).WithContext(ctx)
+	db := c.GetDB(ctx).Table(model.ClassInfoTableName)
 	err := db.
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -50,7 +50,7 @@ func (c ClassInfoDAO) AddClassInfoToDB(ctx context.Context, classInfo *model.Cla
 	}
 
 	// 约定将事务 db 从 ctx 中取出来
-	db := c.GetDB(ctx).Table(model.ClassInfoTableName).WithContext(ctx)
+	db := c.GetDB(ctx).Table(model.ClassInfoTableName)
 	err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&classInfo).Error
 	if err != nil {
 		return errorx.Errorf("dao.classInfo.AddClassInfoToDB: classInfo=%+v: %w", classInfo, err)
@@ -66,7 +66,7 @@ func (c ClassInfoDAO) UpsertClassInfoToDB(ctx context.Context, classInfo *model.
 		return errorx.Errorf("dao.classInfo.UpsertClassInfoToDB: invalid day=%d, classInfo=%+v: %w", classInfo.Day, classInfo, biz.ErrInvalidParam)
 	}
 
-	db := c.GetDB(ctx).Table(model.ClassInfoTableName).WithContext(ctx)
+	db := c.GetDB(ctx).Table(model.ClassInfoTableName)
 	err := db.
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -98,7 +98,7 @@ func (c ClassInfoDAO) DeleteAddedClassInfos(ctx context.Context, classIDs []stri
 		return nil
 	}
 
-	db := c.GetDB(ctx).Table(model.ClassInfoTableName).WithContext(ctx)
+	db := c.GetDB(ctx).Table(model.ClassInfoTableName)
 	err := db.
 		Where("id IN ?", classIDs).
 		Delete(&model.ClassInfo{}).Error
@@ -109,7 +109,7 @@ func (c ClassInfoDAO) DeleteAddedClassInfos(ctx context.Context, classIDs []stri
 }
 
 func (c ClassInfoDAO) GetClassInfos(ctx context.Context, stuId, xnm, xqm string) ([]*model.ClassInfo, error) {
-	db := c.GetDB(ctx).WithContext(ctx)
+	db := c.GetDB(ctx)
 	cla := make([]*model.ClassInfo, 0)
 
 	err := db.Table(model.ClassInfoTableName).Select(fmt.Sprintf("%s.*", model.ClassInfoTableName)).
@@ -148,7 +148,7 @@ func (c ClassInfoDAO) GetAddedClassInfos(ctx context.Context, stuID, xnm, xqm st
 }
 
 func (c ClassInfoDAO) GetClassNatures(ctx context.Context, stuID string) ([]string, error) {
-	db := c.GetDB(ctx).WithContext(ctx)
+	db := c.GetDB(ctx)
 	natures := make([]string, 0)
 
 	subQuery := db.

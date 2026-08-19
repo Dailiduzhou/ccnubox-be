@@ -26,7 +26,7 @@ func (j *JxbDAO) SaveJxb(ctx context.Context, stuID string, jxbID []string) erro
 		return nil
 	}
 
-	db := j.GetDB(ctx).Table(model.JxbTableName).WithContext(ctx)
+	db := j.GetDB(ctx).Table(model.JxbTableName)
 	jxb := make([]model.Jxb, 0, len(jxbID))
 	for _, id := range jxbID {
 		jxb = append(jxb, model.Jxb{
@@ -43,7 +43,7 @@ func (j *JxbDAO) SaveJxb(ctx context.Context, stuID string, jxbID []string) erro
 
 func (j *JxbDAO) FindStuIdsByJxbId(ctx context.Context, jxbId string) ([]string, error) {
 	var stuIds []string
-	err := j.GetDB(ctx).Table(model.JxbTableName).WithContext(ctx).
+	err := j.GetDB(ctx).Table(model.JxbTableName).
 		Select("stu_id").Where("jxb_id = ?", jxbId).Find(&stuIds).Error
 	if err != nil {
 		return nil, errorx.Errorf("dao.jxb.FindStuIdsByJxbId: jxbId=%s, table=%s: %w", jxbId, model.JxbTableName, err)
