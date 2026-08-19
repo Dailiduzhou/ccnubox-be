@@ -184,26 +184,45 @@ func (fc FuncConsumeHandler) ConsumeClaim(session sarama.ConsumerGroupSession, c
 type Consumer struct {
 	cctx       context.Context
 	cancelFunc context.CancelFunc
-	client     sarama.Client
+	newClient  ClientFactory
+	newGroup   consumerGroupFactory
 	log        logger.Logger
 }
 
-func NewConsumer(client sarama.Client, l logger.Logger) *Consumer {
+type ClientFactory func() sarama.Client
+
+type consumerGroupFactory func(groupID string, client sarama.Client) (sarama.ConsumerGroup, error)
+
+func NewConsumer(newClient ClientFactory, l logger.Logger) *Consumer {
 	cctx, cancel := context.WithCancel(context.Background())
 	return &Consumer{
 		cctx:       cctx,
 		cancelFunc: cancel,
-		client:     client,
+		newClient:  newClient,
+		newGroup:   sarama.NewConsumerGroupFromClient,
 		log:        l,
 	}
 }
 
 func (c *Consumer) Consume(topics []string, groupID string, handler sarama.ConsumerGroupHandler) error {
-	cg, err := sarama.NewConsumerGroupFromClient(groupID, c.client)
+	// ConsumerGroup 不共用 Client
+	client := c.newClient()
+	cg, err := c.newGroup(groupID, client)
 	if err != nil {
+		if closeErr := client.Close(); closeErr != nil {
+			c.log.Errorf("Error closing Kafka client after consumer group creation failed: %v", closeErr)
+		}
 		return err
 	}
-	defer cg.Close()
+	defer func() {
+		// Client 生命周期比 ConsumerGroup 长
+		if err := cg.Close(); err != nil {
+			c.log.Errorf("Error closing consumer group %s: %v", groupID, err)
+		}
+		if err := client.Close(); err != nil {
+			c.log.Errorf("Error closing Kafka client for consumer group %s: %v", groupID, err)
+		}
+	}()
 
 	for {
 		if err := cg.Consume(c.cctx, topics, handler); err != nil {

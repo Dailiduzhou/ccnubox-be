@@ -39,7 +39,7 @@ func NewDelayKafkaConfig() DelayKafkaConfig {
 	}
 }
 
-func NewDelayKafka(client sarama.Client, cf DelayKafkaConfig, l logger.Logger, m *metricsx.Metrics) (biz.DelayQueue, func(), error) {
+func NewDelayKafka(client sarama.Client, newConsumerClient consumer.ClientFactory, cf DelayKafkaConfig, l logger.Logger, m *metricsx.Metrics) (biz.DelayQueue, func(), error) {
 	dk := &DelayKafka{
 		delayTopic:   cf.DelayTopic,
 		realTopic:    cf.RealTopic,
@@ -57,7 +57,7 @@ func NewDelayKafka(client sarama.Client, cf DelayKafkaConfig, l logger.Logger, m
 	if err != nil {
 		return nil, nil, err
 	}
-	c := consumer.NewConsumer(client, l)
+	c := consumer.NewConsumer(newConsumerClient, l)
 
 	dk.p = p
 	dk.c = c

@@ -49,9 +49,10 @@ func InitApp() (*App, func(), error) {
 	client2 := ioc.InitHttpProxyClient(proxyClient, infraConf, logger)
 	crawler3 := crawler.NewClassCrawler3(client2, logger)
 	saramaClient := ioc.InitKafka(infraConf)
+	clientFactory := ioc.InitKafkaConsumerClientFactory(infraConf)
 	delayKafkaConfig := delay.NewDelayKafkaConfig()
 	metrics := ioc.InitMetrics()
-	delayQueue, cleanup2, err := delay.NewDelayKafka(saramaClient, delayKafkaConfig, logger, metrics)
+	delayQueue, cleanup2, err := delay.NewDelayKafka(saramaClient, clientFactory, delayKafkaConfig, logger, metrics)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
