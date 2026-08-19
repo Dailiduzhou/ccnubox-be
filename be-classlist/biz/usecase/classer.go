@@ -82,6 +82,12 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 	action, refreshLog, waitBudget := cluc.decideRefreshAction(ctx, stuID, year, semester, refresh, localErr, refreshInterval, waitCrawTime)
 
 	if action == model.ActionReturnLocal {
+		if len(localClasses) == 0 {
+			if localErr != nil {
+				return nil, nil, localErr
+			}
+			return nil, nil, errorx.Errorf("usecase.class.GetClasses: local snapshot is empty: %w", biz.ErrClassNotFound)
+		}
 		logh.Infof("return local classes, last_refresh=%v", localLastRefreshTime)
 		return localClasses, localLastRefreshTime, nil
 	}
@@ -96,7 +102,10 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 			newLocalClassInfo, err := cluc.classRepo.GetClassesFromLocal(ctx, stuID, year, semester)
 			if err != nil {
 				logh.Errorf("fetch class from local failed: %+v", err)
-				return localClasses, localLastRefreshTime, nil
+				if len(localClasses) > 0 {
+					return localClasses, localLastRefreshTime, nil
+				}
+				return nil, nil, err
 			}
 			return newLocalClassInfo, &readyLog.UpdatedAt, nil
 		}
@@ -106,7 +115,13 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 		// 反之就得返回了
 		if waited >= 1*time.Second {
 			logh.Warnf("pending wait timeout, waited=%v, fallback to local", waited)
-			return localClasses, localLastRefreshTime, nil
+			if len(localClasses) > 0 {
+				return localClasses, localLastRefreshTime, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
+			return nil, nil, fmt.Errorf("%w after %v", biz.ErrClassRefreshPending, waited)
 		}
 
 		// 若时间超过一秒或获取爬虫失败
@@ -114,7 +129,7 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 	logh.Infof("start crawl, waitCrawTime=%v", waitCrawTime)
 	requestKey := fmt.Sprintf("craw:%s:%s:%s", stuID, year, semester)
 
-	res, err := cluc.doCrawlWithSingleflight(ctx, requestKey, stuID, year, semester, localClasses, currentTime)
+	res, err := cluc.doCrawlWithSingleflight(ctx, requestKey, stuID, year, semester, waitCrawTime)
 	if err == nil && res != nil {
 		return res, &currentTime, nil
 	}
@@ -122,7 +137,13 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 		logh.Errorf("crawl failed: %+v", err)
 	}
 
-	return localClasses, localLastRefreshTime, nil
+	if len(localClasses) > 0 {
+		return localClasses, localLastRefreshTime, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, nil, fmt.Errorf("%w: refresh returned no data", biz.ErrRefreshInvariant)
 }
 
 func (cluc *ClassUsecase) AddClass(ctx context.Context, stuID string, info *model.ClassInfoBO) error {
