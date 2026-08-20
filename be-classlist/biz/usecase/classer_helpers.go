@@ -15,12 +15,21 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/tool"
 )
 
-const refreshRetryConsumerGroup = "be-classlist-refresh-retry-worker"
+const (
+	refreshRetryConsumerGroup  = "be-classlist-refresh-retry-worker"
+	refreshRetryMessageVersion = 1
+	maxRefreshRetryAttempts    = 3
+	defaultRefreshJobTimeout   = 15 * time.Second
+	retryPublishTimeout        = 5 * time.Second
+)
 
 type refreshRetryMessage struct {
-	StuID    string `json:"stu_id"`
-	Year     string `json:"year"`
-	Semester string `json:"semester"`
+	Version     int    `json:"version"`
+	StuID       string `json:"stu_id"`
+	Year        string `json:"year"`
+	Semester    string `json:"semester"`
+	Attempt     int    `json:"attempt"`
+	MaxAttempts int    `json:"max_attempts"`
 }
 
 // 统一本地查询逻辑 GetClassesFromLocal + GetLastRefreshTime
@@ -382,14 +391,20 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 	return ci, sc, sum, nil
 }
 
-// 发送重试消息
-func (cluc *ClassUsecase) sendRetryMsg(ctx context.Context, stuID, year, semester string) error {
+// 发送一次有界重试消息。attempt 表示即将执行的异步重试序号，从 1 开始。
+func (cluc *ClassUsecase) sendRetryMsg(ctx context.Context, stuID, year, semester string, attempt, maxAttempts int) error {
 	logh := cluc.log.WithContext(ctx)
+	if cluc.delayQue == nil {
+		return errors.New("refresh retry queue is unavailable")
+	}
 
 	retryInfo := refreshRetryMessage{
-		StuID:    stuID,
-		Year:     year,
-		Semester: semester,
+		Version:     refreshRetryMessageVersion,
+		StuID:       stuID,
+		Year:        year,
+		Semester:    semester,
+		Attempt:     attempt,
+		MaxAttempts: maxAttempts,
 	}
 	key := fmt.Sprintf("be-classlist-refresh-retry-%d", time.Now().UnixMilli())
 	val, err := json.Marshal(&retryInfo)
