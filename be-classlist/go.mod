@@ -10,6 +10,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/asynccnu/ccnubox-be/common v0.0.0-20260308110957-82a74932722c
 	github.com/avast/retry-go v3.0.0+incompatible
+	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/wire v0.7.0
 	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.23.2
@@ -46,7 +47,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
-	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect

@@ -57,15 +57,28 @@ func (s *ClassListService) GetClass(ctx context.Context, stuID, year, semester s
 
 	classes, lastTime, err := s.clu.GetClasses(ctx, stuID, year, semester, refresh)
 	if err != nil {
-		if errors.Is(err, biz.ErrInvalidParam) {
-			return nil, nil, ParamError(err)
-		}
-		if errors.Is(err, biz.ErrClassNotFound) {
-			return nil, nil, ClassNotFoundError(err)
-		}
-		return nil, nil, ClassFindError(err)
+		return nil, nil, mapGetClassError(err)
 	}
 	return classes, lastTime, nil
+}
+
+func mapGetClassError(err error) error {
+	switch {
+	case errors.Is(err, biz.ErrInvalidParam),
+		errors.Is(err, biz.ErrUnsupportedStudentType):
+		return ParamError(err)
+	case errors.Is(err, biz.ErrClassNotFound):
+		return ClassNotFoundError(err)
+	case errors.Is(err, biz.ErrCrawlerAuthentication):
+		return CCNULoginError(err)
+	case errors.Is(err, biz.ErrCrawlerProtocol),
+		errors.Is(err, biz.ErrCrawlerTemporary),
+		errors.Is(err, biz.ErrCrawlerEmptyResult),
+		errors.Is(err, biz.ErrClassRefreshPending):
+		return CrawlerError(err)
+	default:
+		return ClassFindError(err)
+	}
 }
 
 func (s *ClassListService) AddClass(ctx context.Context, stuID, name, durClass, where, teacher string, weeks int64, semester, year string, day int64, credit *float64) (id, msg string, err error) {
