@@ -215,7 +215,13 @@ func NewConsumer(newClient ClientFactory, l logger.Logger) *Consumer {
 
 func (c *Consumer) Consume(topics []string, groupID string, handler sarama.ConsumerGroupHandler) error {
 	// ConsumerGroup 不共用 Client
+	if c.newClient == nil {
+		return ErrNilClient
+	}
 	client := c.newClient()
+	if client == nil {
+		return ErrNilClient
+	}
 	cg, err := c.newGroup(groupID, client)
 	if err != nil {
 		if closeErr := client.Close(); closeErr != nil {
@@ -251,6 +257,7 @@ func (c *Consumer) Close() {
 }
 
 var ErrInvalidGroupID = errors.New("the groupID is not allowed")
+var ErrNilClient = errors.New("kafka client factory returned nil")
 
 // classifyError 将 Kafka/Sarama 错误分类，用于 mq_failed_total 标签
 func classifyError(err error) string {

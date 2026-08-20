@@ -39,7 +39,8 @@ type Crawler2 struct {
 func NewClassCrawler2(pg ProxyGetter, l logger.Logger) *Crawler2 {
 	newClient := func() interface{} {
 		return &http.Client{
-			Timeout: 40 * time.Second,
+			Timeout:       40 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 			Transport: &http.Transport{
 				MaxIdleConns:        10, // 既然使用sync.Pool管理对象，这个不宜过大
 				IdleConnTimeout:     90 * time.Second,
@@ -118,7 +119,7 @@ func (c *Crawler2) GetClassInfosForUndergraduate(ctx context.Context, stuID, yea
 	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("read body failed:%v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 
 	infos, err := c.extractCourses(ctx, year, semester, body)
@@ -186,7 +187,7 @@ func (c *Crawler2) GetClassInfoForGraduateStudent(ctx context.Context, stuID, ye
 	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 	infos, Scs, sum, err := extractGraduateData(bodyBytes, stuID, xnm, xqm)
 	if err != nil {

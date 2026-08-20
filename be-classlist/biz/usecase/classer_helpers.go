@@ -15,17 +15,19 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/asynccnu/ccnubox-be/common/tool"
+	"github.com/go-sql-driver/mysql"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 const (
-	refreshRetryConsumerGroup  = "be-classlist-refresh-retry-worker"
+	refreshRetryConsumerGroup  = "be-classlist-refresh-retry-worker-v1"
 	refreshRetryMessageVersion = 1
 	maxRefreshRetryAttempts    = 3
 	defaultRefreshJobTimeout   = 15 * time.Second
 	retryPublishTimeout        = 5 * time.Second
+	refreshStatusUpdateTimeout = 2 * time.Second
 )
 
 type refreshRetryMessage struct {
@@ -78,7 +80,7 @@ func (cluc *ClassUsecase) decideRefreshAction(ctx context.Context, stuID, year, 
 
 		// 刷新已完成
 		// 从本地拿课程
-		if latestLog.IsReady() && localErr == nil {
+		if latestLog.IsReady() && (localErr == nil || errors.Is(localErr, biz.ErrClassNotFound)) {
 			return model.ActionReturnLocal, latestLog, 0
 		}
 
@@ -226,17 +228,22 @@ func (cluc *ClassUsecase) filterAddedClassesConflictingWithOfficial(ctx context.
 }
 
 // 合并同一课表的并发刷新。调用者只控制自己的等待；共享任务不会被首个调用者取消。
-func (cluc *ClassUsecase) doCrawlWithSingleflight(ctx context.Context, key string, stuID, year, semester string, jobTimeout time.Duration) ([]*model.ClassInfoBO, error) {
-	return cluc.doCrawlAttemptWithSingleflight(ctx, key, stuID, year, semester, 0, maxRefreshRetryAttempts, jobTimeout)
+func classRefreshSingleflightKey(stuID, year, semester string) string {
+	return fmt.Sprintf("craw:%s:%s:%s", stuID, year, semester)
 }
 
-func (cluc *ClassUsecase) doCrawlAttemptWithSingleflight(ctx context.Context, key string, stuID, year, semester string, attempt, maxAttempts int, jobTimeout time.Duration) ([]*model.ClassInfoBO, error) {
+func (cluc *ClassUsecase) doCrawlWithSingleflight(ctx context.Context, stuID, year, semester string, jobTimeout time.Duration) ([]*model.ClassInfoBO, error) {
+	return cluc.doCrawlAttemptWithSingleflight(ctx, stuID, year, semester, 0, maxRefreshRetryAttempts, jobTimeout)
+}
+
+func (cluc *ClassUsecase) doCrawlAttemptWithSingleflight(ctx context.Context, stuID, year, semester string, attempt, maxAttempts int, jobTimeout time.Duration) ([]*model.ClassInfoBO, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if jobTimeout <= 0 {
 		jobTimeout = defaultRefreshJobTimeout
 	}
+	key := classRefreshSingleflightKey(stuID, year, semester)
 	resultCh := cluc.sfGroup.DoChan(key, func() (interface{}, error) {
 		jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jobTimeout)
 		defer cancel()
@@ -269,6 +276,20 @@ func (cluc *ClassUsecase) doCrawlAttemptWithSingleflight(ctx context.Context, ke
 	return res, nil
 }
 
+func (cluc *ClassUsecase) updateRefreshLogStatus(ctx context.Context, logID uint64, status string) error {
+	statusCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshStatusUpdateTimeout)
+	defer cancel()
+	if err := cluc.refreshLogRepo.UpdateRefreshLogStatus(statusCtx, logID, status); err != nil {
+		cluc.log.WithContext(statusCtx).Error("update class refresh log status failed",
+			logger.Int64("log_id", int64(logID)),
+			logger.String("status", status),
+			logger.Error(err),
+		)
+		return err
+	}
+	return nil
+}
+
 // crawlOnce 只执行一次刷新；重试策略由调用方统一协调。
 func (cluc *ClassUsecase) crawlOnce(ctx context.Context, stuID, year, semester string) ([]*model.ClassInfoBO, error) {
 	local, _, err := cluc.loadLocal(ctx, stuID, year, semester)
@@ -296,7 +317,9 @@ func (cluc *ClassUsecase) crawMergedClass(ctx context.Context, stuID, year, seme
 	// 执行爬虫
 	crawClassInfos, crawScs, _, err := cluc.getCourseFromCrawler(ctx, stuID, year, semester)
 	if err != nil {
-		_ = cluc.refreshLogRepo.UpdateRefreshLogStatus(ctx, logID, model.Failed)
+		if statusErr := cluc.updateRefreshLogStatus(ctx, logID, model.Failed); statusErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("%w: mark refresh failed: %w", biz.ErrRefreshPersistence, statusErr))
+		}
 		return nil, err
 	}
 
@@ -324,12 +347,17 @@ func (cluc *ClassUsecase) crawMergedClass(ctx context.Context, stuID, year, seme
 	jxbIDs := extractJxb(crawClassInfos)
 	err = cluc.classRepo.SaveClass(ctx, stuID, year, semester, crawClassInfos, crawScs)
 	if err != nil {
-		_ = cluc.refreshLogRepo.UpdateRefreshLogStatus(ctx, logID, model.Failed)
-		return nil, fmt.Errorf("%w: save class snapshot: %w", biz.ErrRefreshPersistence, err)
+		refreshErr := fmt.Errorf("%w: save class snapshot: %w", biz.ErrRefreshPersistence, err)
+		if statusErr := cluc.updateRefreshLogStatus(ctx, logID, model.Failed); statusErr != nil {
+			return nil, errors.Join(refreshErr, fmt.Errorf("%w: mark refresh failed: %w", biz.ErrRefreshPersistence, statusErr))
+		}
+		return nil, refreshErr
 	}
 
 	if !mergeAdd {
-		_ = cluc.refreshLogRepo.UpdateRefreshLogStatus(ctx, logID, model.Ready)
+		if err := cluc.updateRefreshLogStatus(ctx, logID, model.Ready); err != nil {
+			return nil, fmt.Errorf("%w: mark refresh ready: %w", biz.ErrRefreshPersistence, err)
+		}
 		_ = cluc.jxbRepo.SaveJxb(ctx, stuID, jxbIDs)
 		return crawClassInfos, nil
 	}
@@ -344,12 +372,17 @@ func (cluc *ClassUsecase) crawMergedClass(ctx context.Context, stuID, year, seme
 	if len(conflictAddedIDs) > 0 {
 		err := cluc.classRepo.DeleteAddedClasses(ctx, stuID, year, semester, conflictAddedIDs)
 		if err != nil {
-			_ = cluc.refreshLogRepo.UpdateRefreshLogStatus(ctx, logID, model.Failed)
-			return nil, fmt.Errorf("%w: delete conflicting added classes: %w", biz.ErrRefreshPersistence, err)
+			refreshErr := fmt.Errorf("%w: delete conflicting added classes: %w", biz.ErrRefreshPersistence, err)
+			if statusErr := cluc.updateRefreshLogStatus(ctx, logID, model.Failed); statusErr != nil {
+				return nil, errors.Join(refreshErr, fmt.Errorf("%w: mark refresh failed: %w", biz.ErrRefreshPersistence, statusErr))
+			}
+			return nil, refreshErr
 		}
 	}
 
-	_ = cluc.refreshLogRepo.UpdateRefreshLogStatus(ctx, logID, model.Ready)
+	if err := cluc.updateRefreshLogStatus(ctx, logID, model.Ready); err != nil {
+		return nil, fmt.Errorf("%w: mark refresh ready: %w", biz.ErrRefreshPersistence, err)
+	}
 	_ = cluc.jxbRepo.SaveJxb(ctx, stuID, jxbIDs)
 
 	crawClassInfos = append(crawClassInfos, addedInfos...)
@@ -396,6 +429,7 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 	case tool.PostGraduate:
 		stu = &biz.GraduateStudent{}
 	default:
+		crawSuccess = false
 		return nil, nil, -1, fmt.Errorf("%w: stu_id=%s", biz.ErrUnsupportedStudentType, stuID)
 	}
 
@@ -409,8 +443,11 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 			logh.Errorf("craw classlist stu_id=%s year=%s semester=%s failed: %+v", stuID, year, semester, err)
 			return nil, nil, -1, err
 		}
+		if len(classinfos) == 0 && len(scs) == 0 {
+			return make([]*model.ClassInfoBO, 0), make([]*model.StudentCourseBO, 0), sum, nil
+		}
 		if len(classinfos) == 0 || len(scs) == 0 {
-			return nil, nil, -1, fmt.Errorf("%w: no classinfos or student-course relations found", biz.ErrCrawlerEmptyResult)
+			return nil, nil, -1, fmt.Errorf("%w: inconsistent class and student-course results", biz.ErrCrawlerProtocol)
 		}
 		return classinfos, scs, sum, nil
 	}()
@@ -461,7 +498,7 @@ func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, yea
 		return
 	}
 	if attempt >= maxAttempts {
-		// crawMergedClass 已将本次刷新日志持久化为 Failed；此处明确结束重试链。
+		// 超过最大重试，打日志
 		logh.Error("class refresh retries exhausted",
 			logger.String("stu_id", stuID),
 			logger.String("year", year),
@@ -505,9 +542,21 @@ func shouldRetryClassRefresh(err error) bool {
 		return false
 	}
 
+	if errors.Is(err, biz.ErrRefreshPersistence) {
+		var mysqlErr *mysql.MySQLError
+		if !errors.As(err, &mysqlErr) {
+			return false
+		}
+		switch mysqlErr.Number {
+		case 1205, 1213, 2006, 2013:
+			return true
+		default:
+			return false
+		}
+	}
+
 	if errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, biz.ErrCrawlerTemporary) ||
-		errors.Is(err, biz.ErrRefreshPersistence) ||
 		errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
@@ -542,7 +591,7 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 	var retryInfo refreshRetryMessage
 	if err := json.Unmarshal(value, &retryInfo); err != nil {
 		logh.Errorf("unmarshal refresh retry msg failed: value=%s, err=%+v", string(value), err)
-		return
+		return fmt.Errorf("unmarshal refresh retry message: %w", err)
 	}
 	if retryInfo.StuID == "" || retryInfo.Year == "" || retryInfo.Semester == "" {
 		logh.Errorf("invalid refresh retry msg: value=%s", string(value))
@@ -561,7 +610,6 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 	}
 
 	logh.Infof("consume refresh retry msg stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts)
-	retryKey := fmt.Sprintf("retry:craw:%s:%s:%s:%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt)
 	retryJobTimeout := defaultRefreshJobTimeout
 	if cluc.conf != nil && cluc.conf.ClassListConf != nil {
 		configuredTimeout := time.Duration(cluc.conf.ClassListConf.WaitCrawTime) * time.Millisecond

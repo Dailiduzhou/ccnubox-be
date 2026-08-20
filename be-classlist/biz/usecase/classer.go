@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -71,6 +72,9 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 	localClasses, localLastRefreshTime, localErr := cluc.loadLocal(ctx, stuID, year, semester)
 	if localErr != nil {
 		logh.Errorf("load local failed: %+v", localErr)
+		if !errors.Is(localErr, biz.ErrClassNotFound) {
+			return nil, nil, localErr
+		}
 	}
 
 	// 希望首次爬虫时间更长
@@ -83,6 +87,9 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 
 	if action == model.ActionReturnLocal {
 		if len(localClasses) == 0 {
+			if refreshLog != nil && refreshLog.IsReady() && errors.Is(localErr, biz.ErrClassNotFound) {
+				return make([]*model.ClassInfoBO, 0), &refreshLog.UpdatedAt, nil
+			}
 			if localErr != nil {
 				return nil, nil, localErr
 			}
@@ -127,9 +134,7 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 		// 若时间超过一秒或获取爬虫失败
 	}
 	logh.Infof("start crawl, waitCrawTime=%v", waitCrawTime)
-	requestKey := fmt.Sprintf("craw:%s:%s:%s", stuID, year, semester)
-
-	res, err := cluc.doCrawlWithSingleflight(ctx, requestKey, stuID, year, semester, waitCrawTime)
+	res, err := cluc.doCrawlWithSingleflight(ctx, stuID, year, semester, waitCrawTime)
 	if err == nil && res != nil {
 		return res, &currentTime, nil
 	}

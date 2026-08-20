@@ -19,7 +19,11 @@ func classifyResponseError(resp *http.Response, err error) error {
 	if errors.Is(err, httpx.ErrUnexpectedStatus) && resp != nil {
 		statusCode := resp.StatusCode
 		switch {
-		case statusCode >= http.StatusMultipleChoices && statusCode < http.StatusBadRequest,
+		case statusCode == http.StatusMovedPermanently,
+			statusCode == http.StatusFound,
+			statusCode == http.StatusSeeOther,
+			statusCode == http.StatusTemporaryRedirect,
+			statusCode == http.StatusPermanentRedirect,
 			statusCode == http.StatusUnauthorized,
 			statusCode == http.StatusForbidden:
 			return fmt.Errorf("%w: status=%d: %w", biz.ErrCrawlerAuthentication, statusCode, err)
