@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
@@ -73,7 +75,7 @@ func (cluc *ClassUsecase) decideRefreshAction(ctx context.Context, stuID, year, 
 
 		// 刷新已完成
 		// 从本地拿课程
-		if latestLog.IsReady() {
+		if latestLog.IsReady() && localErr == nil {
 			return model.ActionReturnLocal, latestLog, 0
 		}
 
@@ -220,26 +222,46 @@ func (cluc *ClassUsecase) filterAddedClassesConflictingWithOfficial(ctx context.
 	return kept, conflictIDs
 }
 
-// 包一层 singleflight + crawClass 调用 + 超时处理
-func (cluc *ClassUsecase) doCrawlWithSingleflight(ctx context.Context, key string, stuID, year, semester string, local []*model.ClassInfoBO, logTime time.Time) ([]*model.ClassInfoBO, error) {
-	v, err, _ := cluc.sfGroup.Do(key, func() (interface{}, error) {
-		res, err := cluc.crawMergedClass(ctx, stuID, year, semester, logTime, local, true)
+// 合并同一课表的并发刷新。调用者只控制自己的等待；共享任务不会被首个调用者取消。
+func (cluc *ClassUsecase) doCrawlWithSingleflight(ctx context.Context, key string, stuID, year, semester string, jobTimeout time.Duration) ([]*model.ClassInfoBO, error) {
+	return cluc.doCrawlAttemptWithSingleflight(ctx, key, stuID, year, semester, 0, maxRefreshRetryAttempts, jobTimeout)
+}
+
+func (cluc *ClassUsecase) doCrawlAttemptWithSingleflight(ctx context.Context, key string, stuID, year, semester string, attempt, maxAttempts int, jobTimeout time.Duration) ([]*model.ClassInfoBO, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if jobTimeout <= 0 {
+		jobTimeout = defaultRefreshJobTimeout
+	}
+	resultCh := cluc.sfGroup.DoChan(key, func() (interface{}, error) {
+		jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jobTimeout)
+		defer cancel()
+		res, err := cluc.crawlOnce(jobCtx, stuID, year, semester)
 		if err != nil {
+			cluc.coordinateRefreshRetry(jobCtx, stuID, year, semester, attempt, maxAttempts, err)
 			return nil, err
 		}
 		if res == nil {
-			return nil, fmt.Errorf("crawler returned empty result")
+			return nil, fmt.Errorf("%w: crawler returned nil result", biz.ErrRefreshInvariant)
 		}
 		return res, nil
 	})
 
-	if err != nil {
-		return nil, err
+	var result singleflight.Result
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result = <-resultCh:
 	}
 
-	res, ok := v.([]*model.ClassInfoBO)
+	if result.Err != nil {
+		return nil, result.Err
+	}
+
+	res, ok := result.Val.([]*model.ClassInfoBO)
 	if !ok {
-		return nil, fmt.Errorf("crawler returned unexpected result type")
+		return nil, fmt.Errorf("%w: crawler returned unexpected result type %T", biz.ErrRefreshInvariant, result.Val)
 	}
 	return res, nil
 }
