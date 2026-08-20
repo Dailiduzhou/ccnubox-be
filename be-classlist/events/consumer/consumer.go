@@ -132,13 +132,13 @@ func (c *DelaySendHandler) forwardMessage(ctx context.Context, msg *sarama.Consu
 
 // FuncConsumeHandler 消费真实 topic 消息并交付给应用
 type FuncConsumeHandler struct {
-	f             func(ctx context.Context, key []byte, value []byte)
+	f             func(ctx context.Context, key []byte, value []byte) error
 	log           logger.Logger
 	consumedTotal *prometheus.CounterVec
 	mqFailedTotal *prometheus.CounterVec
 }
 
-func NewFuncConsumeHandler(f func(ctx context.Context, key []byte, value []byte), l logger.Logger, m *metricsx.Metrics) FuncConsumeHandler {
+func NewFuncConsumeHandler(f func(ctx context.Context, key []byte, value []byte) error, l logger.Logger, m *metricsx.Metrics) FuncConsumeHandler {
 	return FuncConsumeHandler{
 		f:             f,
 		log:           l,
@@ -169,11 +169,20 @@ func (fc FuncConsumeHandler) ConsumeClaim(session sarama.ConsumerGroupSession, c
 		tlog := fc.log.WithContext(ctx)
 
 		tlog.Debugf("Message claimed: key:%s, value:%s", string(message.Key), string(message.Value))
-		fc.f(ctx, message.Key, message.Value)
-
-		if fc.consumedTotal != nil {
+		err := fc.f(ctx, message.Key, message.Value)
+		if err != nil {
+			tlog.Errorf("Error handling message: %v", err)
+			span.RecordError(err)
+			if fc.consumedTotal != nil {
+				fc.consumedTotal.WithLabelValues(message.Topic, "Error").Inc()
+			}
+			if fc.mqFailedTotal != nil {
+				fc.mqFailedTotal.WithLabelValues(message.Topic, classifyError(err)).Inc()
+			}
+		} else if fc.consumedTotal != nil {
 			fc.consumedTotal.WithLabelValues(message.Topic, "OK").Inc()
 		}
+		// 失败消息仍提交 offset；刷新逻辑会发布下一条延迟消息承接重试。
 		session.MarkMessage(message, "")
 
 		span.End()

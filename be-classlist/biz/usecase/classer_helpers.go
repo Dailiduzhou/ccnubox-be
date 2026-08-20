@@ -536,7 +536,7 @@ func (cluc *ClassUsecase) startRetryConsumer() {
 	}()
 }
 
-func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, value []byte) {
+func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, value []byte) error {
 	logh := cluc.log.WithContext(ctx)
 
 	var retryInfo refreshRetryMessage
@@ -546,22 +546,18 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 	}
 	if retryInfo.StuID == "" || retryInfo.Year == "" || retryInfo.Semester == "" {
 		logh.Errorf("invalid refresh retry msg: value=%s", string(value))
-		return
+		return fmt.Errorf("invalid refresh retry message: missing required field")
 	}
-	if retryInfo.Version != 0 && retryInfo.Version != refreshRetryMessageVersion {
+	if retryInfo.Version != refreshRetryMessageVersion {
 		logh.Errorf("unsupported refresh retry msg version: value=%s", string(value))
-		return
-	}
-	// 兼容升级前已经在 Kafka 中、尚未消费的无 attempt 消息。
-	if retryInfo.Attempt == 0 {
-		retryInfo.Attempt = 1
+		return fmt.Errorf("unsupported refresh retry message version: %d", retryInfo.Version)
 	}
 	if retryInfo.MaxAttempts <= 0 || retryInfo.MaxAttempts > maxRefreshRetryAttempts {
 		retryInfo.MaxAttempts = maxRefreshRetryAttempts
 	}
 	if retryInfo.Attempt < 1 || retryInfo.Attempt > retryInfo.MaxAttempts {
 		logh.Errorf("invalid refresh retry attempt: attempt=%d max_attempts=%d value=%s", retryInfo.Attempt, retryInfo.MaxAttempts, string(value))
-		return
+		return fmt.Errorf("invalid refresh retry attempt: attempt=%d max_attempts=%d", retryInfo.Attempt, retryInfo.MaxAttempts)
 	}
 
 	logh.Infof("consume refresh retry msg stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts)
@@ -571,12 +567,13 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 		configuredTimeout := time.Duration(cluc.conf.ClassListConf.WaitCrawTime) * time.Millisecond
 		retryJobTimeout = max(retryJobTimeout, configuredTimeout)
 	}
-	_, err := cluc.doCrawlAttemptWithSingleflight(ctx, retryKey, retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, retryJobTimeout)
+	_, err := cluc.doCrawlAttemptWithSingleflight(ctx, retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, retryJobTimeout)
 	if err != nil {
 		logh.Errorf("handle refresh retry msg failed stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d: %+v", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, err)
-		return
+		return err
 	}
 	logh.Infof("handle refresh retry msg succeeded stu_id=%s year=%s semester=%s attempt=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt)
+	return nil
 }
 
 func extractJxb(infos []*model.ClassInfoBO) []string {

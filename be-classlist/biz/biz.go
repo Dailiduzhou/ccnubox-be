@@ -38,7 +38,7 @@ type ClassCrawler interface {
 
 type DelayQueue interface {
 	Send(ctx context.Context, key, value []byte) error
-	Consume(groupID string, f func(ctx context.Context, key []byte, value []byte)) error
+	Consume(groupID string, f func(ctx context.Context, key []byte, value []byte) error) error
 	Close()
 }
 
