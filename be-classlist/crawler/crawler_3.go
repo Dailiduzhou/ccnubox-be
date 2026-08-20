@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz/model"
 	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/tool"
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
@@ -99,13 +100,13 @@ func (c *Crawler3) GetClassInfosForUndergraduate(ctx context.Context, stuID, yea
 	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("read body failed:%v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 
 	infos, err := c.extractCourses(ctx, year, semester, body)
 	if err != nil {
 		logh.Errorf("failed to extract infos: %v", err)
-		return nil, nil, -1, fmt.Errorf("failed to extract infos: %v", err)
+		return nil, nil, -1, fmt.Errorf("%w: failed to extract infos: %w", biz.ErrCrawlerProtocol, err)
 	}
 
 	scs := make([]*model.StudentCourseBO, 0, len(infos))
@@ -355,12 +356,12 @@ func (c *Crawler3) GetClassInfoForGraduateStudent(ctx context.Context, stuID, ye
 	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 	infos, Scs, sum, err := extractGraduateData(bodyBytes, stuID, xnm, xqm)
 	if err != nil {
 		logh.Errorf("extractUndergraduateData err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler3.GetClassInfoForGraduateStudent extract failed: %w", err)
+		return nil, nil, -1, fmt.Errorf("%w: crawler.crawler3.GetClassInfoForGraduateStudent extract failed: %w", biz.ErrCrawlerProtocol, err)
 	}
 	return infos, Scs, sum, nil
 }

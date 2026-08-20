@@ -124,7 +124,7 @@ func (c *Crawler2) GetClassInfosForUndergraduate(ctx context.Context, stuID, yea
 	infos, err := c.extractCourses(ctx, year, semester, body)
 	if err != nil {
 		logh.Errorf("failed to extract infos: %v", err)
-		return nil, nil, -1, fmt.Errorf("failed to extract infos: %v", err)
+		return nil, nil, -1, fmt.Errorf("failed to extract infos: %w", err)
 	}
 
 	scs := make([]*model.StudentCourseBO, 0, len(infos))
@@ -208,7 +208,7 @@ func (c *Crawler2) extractCourses(ctx context.Context, year, semester string, ht
 	logh := c.log.WithContext(ctx)
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(html))
 	if err != nil {
-		return nil, fmt.Errorf("NewDocumentFromReader err: %v", err)
+		return nil, fmt.Errorf("NewDocumentFromReader err: %w", err)
 	}
 
 	var classInfos []*model.ClassInfoBO

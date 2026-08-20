@@ -15,6 +15,9 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/asynccnu/ccnubox-be/common/tool"
+	"golang.org/x/sync/singleflight"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -266,6 +269,15 @@ func (cluc *ClassUsecase) doCrawlAttemptWithSingleflight(ctx context.Context, ke
 	return res, nil
 }
 
+// crawlOnce 只执行一次刷新；重试策略由调用方统一协调。
+func (cluc *ClassUsecase) crawlOnce(ctx context.Context, stuID, year, semester string) ([]*model.ClassInfoBO, error) {
+	local, _, err := cluc.loadLocal(ctx, stuID, year, semester)
+	if err != nil && !errors.Is(err, biz.ErrClassNotFound) {
+		cluc.log.WithContext(ctx).Warnf("load local metadata before refresh failed: %+v", err)
+	}
+	return cluc.crawMergedClass(ctx, stuID, year, semester, time.Now(), local, true)
+}
+
 // 爬取课表并合并自写课程
 func (cluc *ClassUsecase) crawMergedClass(ctx context.Context, stuID, year, semester string, logTime time.Time, localClassInfo []*model.ClassInfoBO, mergeAdd bool) ([]*model.ClassInfoBO, error) {
 	logh := cluc.log.WithContext(ctx)
@@ -278,15 +290,13 @@ func (cluc *ClassUsecase) crawMergedClass(ctx context.Context, stuID, year, seme
 	// 插入刷新日志
 	logID, err := cluc.refreshLogRepo.InsertRefreshLog(ctx, stuID, year, semester, model.Pending, logTime)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: insert refresh log: %w", biz.ErrRefreshPersistence, err)
 	}
 
 	// 执行爬虫
 	crawClassInfos, crawScs, _, err := cluc.getCourseFromCrawler(ctx, stuID, year, semester)
 	if err != nil {
 		_ = cluc.refreshLogRepo.UpdateRefreshLogStatus(ctx, logID, model.Failed)
-		// 重试
-		_ = cluc.sendRetryMsg(ctx, stuID, year, semester)
 		return nil, err
 	}
 
@@ -315,8 +325,7 @@ func (cluc *ClassUsecase) crawMergedClass(ctx context.Context, stuID, year, seme
 	err = cluc.classRepo.SaveClass(ctx, stuID, year, semester, crawClassInfos, crawScs)
 	if err != nil {
 		_ = cluc.refreshLogRepo.UpdateRefreshLogStatus(ctx, logID, model.Failed)
-		_ = cluc.sendRetryMsg(ctx, stuID, year, semester)
-		return nil, err
+		return nil, fmt.Errorf("%w: save class snapshot: %w", biz.ErrRefreshPersistence, err)
 	}
 
 	if !mergeAdd {
@@ -336,8 +345,7 @@ func (cluc *ClassUsecase) crawMergedClass(ctx context.Context, stuID, year, seme
 		err := cluc.classRepo.DeleteAddedClasses(ctx, stuID, year, semester, conflictAddedIDs)
 		if err != nil {
 			_ = cluc.refreshLogRepo.UpdateRefreshLogStatus(ctx, logID, model.Failed)
-			_ = cluc.sendRetryMsg(ctx, stuID, year, semester)
-			return nil, err
+			return nil, fmt.Errorf("%w: delete conflicting added classes: %w", biz.ErrRefreshPersistence, err)
 		}
 	}
 
@@ -376,7 +384,7 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 	if len(cookie) == 0 {
 		crawSuccess = false
 		logh.Error(fmt.Sprintf("the cookie from other service is empty for stu_id:%v", stuID))
-		return nil, nil, -1, fmt.Errorf("the cookie from other service is empty for stu_id:%v", stuID)
+		return nil, nil, -1, fmt.Errorf("%w: empty cookie for stu_id=%s", biz.ErrCrawlerAuthentication, stuID)
 	}
 
 	var stu biz.Student
@@ -388,7 +396,7 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 	case tool.PostGraduate:
 		stu = &biz.GraduateStudent{}
 	default:
-		return nil, nil, -1, fmt.Errorf("the type of student isn't undergraduate")
+		return nil, nil, -1, fmt.Errorf("%w: stu_id=%s", biz.ErrUnsupportedStudentType, stuID)
 	}
 
 	ci, sc, sum, err := func() ([]*model.ClassInfoBO, []*model.StudentCourseBO, int, error) {
@@ -402,7 +410,7 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 			return nil, nil, -1, err
 		}
 		if len(classinfos) == 0 || len(scs) == 0 {
-			return nil, nil, -1, errors.New("no classinfos or scs found")
+			return nil, nil, -1, fmt.Errorf("%w: no classinfos or student-course relations found", biz.ErrCrawlerEmptyResult)
 		}
 		return classinfos, scs, sum, nil
 	}()
@@ -440,6 +448,82 @@ func (cluc *ClassUsecase) sendRetryMsg(ctx context.Context, stuID, year, semeste
 	return err
 }
 
+func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, year, semester string, attempt, maxAttempts int, cause error) {
+	logh := cluc.log.WithContext(ctx)
+	if !shouldRetryClassRefresh(cause) {
+		logh.Warn("class refresh failure is not retryable",
+			logger.String("stu_id", stuID),
+			logger.String("year", year),
+			logger.String("semester", semester),
+			logger.Int("attempt", attempt),
+			logger.Error(cause),
+		)
+		return
+	}
+	if attempt >= maxAttempts {
+		// crawMergedClass 已将本次刷新日志持久化为 Failed；此处明确结束重试链。
+		logh.Error("class refresh retries exhausted",
+			logger.String("stu_id", stuID),
+			logger.String("year", year),
+			logger.String("semester", semester),
+			logger.Int("attempt", attempt),
+			logger.Int("max_attempts", maxAttempts),
+			logger.Error(cause),
+		)
+		return
+	}
+
+	nextAttempt := attempt + 1
+	// 刷新失败经常意味着 jobCtx 已到 deadline。发布下一条消息必须脱离该取消信号
+	publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), retryPublishTimeout)
+	defer cancel()
+	if err := cluc.sendRetryMsg(publishCtx, stuID, year, semester, nextAttempt, maxAttempts); err != nil {
+		logh.Error("schedule class refresh retry failed",
+			logger.String("stu_id", stuID),
+			logger.String("year", year),
+			logger.String("semester", semester),
+			logger.Int("attempt", nextAttempt),
+			logger.Int("max_attempts", maxAttempts),
+			logger.Error(err),
+		)
+	}
+}
+
+// 错误白名单，确定是否需要重试
+func shouldRetryClassRefresh(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	if errors.Is(err, biz.ErrCrawlerAuthentication) ||
+		errors.Is(err, biz.ErrCrawlerProtocol) ||
+		errors.Is(err, biz.ErrCrawlerEmptyResult) ||
+		errors.Is(err, biz.ErrCookieUnavailable) ||
+		errors.Is(err, biz.ErrUnsupportedStudentType) ||
+		errors.Is(err, biz.ErrRefreshInvariant) ||
+		errors.Is(err, biz.ErrInvalidParam) {
+		return false
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, biz.ErrCrawlerTemporary) ||
+		errors.Is(err, biz.ErrRefreshPersistence) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	switch status.Code(err) {
+	case codes.DeadlineExceeded, codes.ResourceExhausted, codes.Aborted, codes.Unavailable:
+		return true
+	case codes.Canceled, codes.InvalidArgument, codes.NotFound, codes.PermissionDenied, codes.Unauthenticated:
+		return false
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+}
+
 func (cluc *ClassUsecase) startRetryConsumer() {
 	if cluc.delayQue == nil {
 		return
@@ -464,14 +548,35 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 		logh.Errorf("invalid refresh retry msg: value=%s", string(value))
 		return
 	}
-
-	logh.Infof("consume refresh retry msg stu_id=%s year=%s semester=%s", retryInfo.StuID, retryInfo.Year, retryInfo.Semester)
-	_, _, err := cluc.GetClasses(ctx, retryInfo.StuID, retryInfo.Year, retryInfo.Semester, true)
-	if err != nil {
-		logh.Errorf("handle refresh retry msg failed stu_id=%s year=%s semester=%s: %+v", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, err)
+	if retryInfo.Version != 0 && retryInfo.Version != refreshRetryMessageVersion {
+		logh.Errorf("unsupported refresh retry msg version: value=%s", string(value))
 		return
 	}
-	logh.Infof("handle refresh retry msg handled stu_id=%s year=%s semester=%s", retryInfo.StuID, retryInfo.Year, retryInfo.Semester)
+	// 兼容升级前已经在 Kafka 中、尚未消费的无 attempt 消息。
+	if retryInfo.Attempt == 0 {
+		retryInfo.Attempt = 1
+	}
+	if retryInfo.MaxAttempts <= 0 || retryInfo.MaxAttempts > maxRefreshRetryAttempts {
+		retryInfo.MaxAttempts = maxRefreshRetryAttempts
+	}
+	if retryInfo.Attempt < 1 || retryInfo.Attempt > retryInfo.MaxAttempts {
+		logh.Errorf("invalid refresh retry attempt: attempt=%d max_attempts=%d value=%s", retryInfo.Attempt, retryInfo.MaxAttempts, string(value))
+		return
+	}
+
+	logh.Infof("consume refresh retry msg stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts)
+	retryKey := fmt.Sprintf("retry:craw:%s:%s:%s:%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt)
+	retryJobTimeout := defaultRefreshJobTimeout
+	if cluc.conf != nil && cluc.conf.ClassListConf != nil {
+		configuredTimeout := time.Duration(cluc.conf.ClassListConf.WaitCrawTime) * time.Millisecond
+		retryJobTimeout = max(retryJobTimeout, configuredTimeout)
+	}
+	_, err := cluc.doCrawlAttemptWithSingleflight(ctx, retryKey, retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, retryJobTimeout)
+	if err != nil {
+		logh.Errorf("handle refresh retry msg failed stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d: %+v", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, err)
+		return
+	}
+	logh.Infof("handle refresh retry msg succeeded stu_id=%s year=%s semester=%s attempt=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt)
 }
 
 func extractJxb(infos []*model.ClassInfoBO) []string {
