@@ -75,7 +75,7 @@ func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester 
 
 	// 希望首次爬虫时间更长
 	if localLastRefreshTime == nil {
-		waitCrawTime = max(waitCrawTime, 15*time.Second)
+		waitCrawTime = max(waitCrawTime, defaultRefreshJobTimeout)
 	}
 
 	// 2. 状态检查，决定从哪里获取课程数据
