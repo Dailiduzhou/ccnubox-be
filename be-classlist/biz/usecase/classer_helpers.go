@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"syscall"
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
@@ -534,8 +535,7 @@ func shouldRetryClassRefresh(err error) bool {
 		return false
 	}
 
-	if errors.Is(err, biz.ErrCrawlerAuthentication) ||
-		errors.Is(err, biz.ErrCrawlerProtocol) ||
+	if errors.Is(err, biz.ErrCrawlerProtocol) ||
 		errors.Is(err, biz.ErrCrawlerEmptyResult) ||
 		errors.Is(err, biz.ErrCookieUnavailable) ||
 		errors.Is(err, biz.ErrUnsupportedStudentType) ||
@@ -546,21 +546,22 @@ func shouldRetryClassRefresh(err error) bool {
 
 	if errors.Is(err, biz.ErrRefreshPersistence) {
 		var mysqlErr *mysql.MySQLError
-		if !errors.As(err, &mysqlErr) {
-			return false
-		}
-		switch mysqlErr.Number {
-		case 1205, 1213, 2006, 2013:
-			return true
-		default:
-			return false
+		if errors.As(err, &mysqlErr) {
+			switch mysqlErr.Number {
+			case 1205, 1213, 2006, 2013:
+				return true
+			}
 		}
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, biz.ErrCrawlerAuthentication) ||
 		errors.Is(err, biz.ErrCrawlerTemporary) ||
 		errors.Is(err, io.EOF) ||
-		errors.Is(err, io.ErrUnexpectedEOF) {
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE) {
 		return true
 	}
 
@@ -572,7 +573,11 @@ func shouldRetryClassRefresh(err error) bool {
 	}
 
 	var netErr net.Error
-	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
 }
 
 func (cluc *ClassUsecase) startRetryConsumer() {
