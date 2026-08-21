@@ -181,7 +181,7 @@ func (cla ClassRepo) UpdateClassNote(ctx context.Context, stuID, year, semester,
 
 // SaveClass 保存课程[删除原本的，添加新的，主要是为了防止感知不到原本的和新增的之间有差异]
 func (cla ClassRepo) SaveClass(ctx context.Context, stuID, year, semester string, classInfos []*bizModel.ClassInfoBO, scs []*bizModel.StudentCourseBO) error {
-	if (len(classInfos) == 0) != (len(scs) == 0) {
+	if len(classInfos) != len(scs) {
 		return errorx.Errorf("repo.class.SaveClass: inconsistent classInfos and scs lengths: %w", biz.ErrCrawlerProtocol)
 	}
 
