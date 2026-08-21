@@ -40,6 +40,20 @@ type refreshRetryMessage struct {
 	MaxAttempts int    `json:"max_attempts"`
 }
 
+// retryHandoffError 表示刷新失败后，下一条延迟重试消息未能发布。
+// 只有该错误需要保留当前 Kafka 消息并让 consumer group 重新消费。
+type retryHandoffError struct {
+	cause error
+}
+
+func (e *retryHandoffError) Error() string {
+	return fmt.Sprintf("refresh retry handoff failed: %v", e.cause)
+}
+
+func (e *retryHandoffError) Unwrap() error {
+	return e.cause
+}
+
 // 统一本地查询逻辑 GetClassesFromLocal + GetLastRefreshTime
 func (cluc *ClassUsecase) loadLocal(ctx context.Context, stuID, year, semester string) (classes []*model.ClassInfoBO, lastRefresh *time.Time, err error) {
 	logh := cluc.log.WithContext(ctx)
@@ -246,13 +260,15 @@ func (cluc *ClassUsecase) doCrawlAttemptWithSingleflight(ctx context.Context, st
 	if jobTimeout <= 0 {
 		jobTimeout = defaultRefreshJobTimeout
 	}
-	key := classRefreshSingleflightKey(stuID, year, semester)
+	key := classRefreshSingleflightKey(stuID, year, semester, attempt, maxAttempts)
 	resultCh := cluc.sfGroup.DoChan(key, func() (interface{}, error) {
 		jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jobTimeout)
 		defer cancel()
 		res, err := cluc.crawlOnce(jobCtx, stuID, year, semester)
 		if err != nil {
-			cluc.coordinateRefreshRetry(jobCtx, stuID, year, semester, attempt, maxAttempts, err)
+			if handoffErr := cluc.coordinateRefreshRetry(jobCtx, stuID, year, semester, attempt, maxAttempts, err); handoffErr != nil {
+				return nil, errors.Join(err, &retryHandoffError{cause: handoffErr})
+			}
 			return nil, err
 		}
 		if res == nil {
@@ -488,7 +504,7 @@ func (cluc *ClassUsecase) sendRetryMsg(ctx context.Context, stuID, year, semeste
 	return err
 }
 
-func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, year, semester string, attempt, maxAttempts int, cause error) {
+func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, year, semester string, attempt, maxAttempts int, cause error) error {
 	logh := cluc.log.WithContext(ctx)
 	if !shouldRetryClassRefresh(cause) {
 		logh.Warn("class refresh failure is not retryable",
@@ -498,7 +514,7 @@ func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, yea
 			logger.Int("attempt", attempt),
 			logger.Error(cause),
 		)
-		return
+		return nil
 	}
 	if attempt >= maxAttempts {
 		// 超过最大重试，打日志
@@ -510,7 +526,7 @@ func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, yea
 			logger.Int("max_attempts", maxAttempts),
 			logger.Error(cause),
 		)
-		return
+		return nil
 	}
 
 	nextAttempt := attempt + 1
@@ -526,7 +542,9 @@ func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, yea
 			logger.Int("max_attempts", maxAttempts),
 			logger.Error(err),
 		)
+		return fmt.Errorf("publish refresh retry attempt %d: %w", nextAttempt, err)
 	}
+	return nil
 }
 
 // 错误白名单，确定是否需要重试
@@ -648,13 +666,18 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 		configuredTimeout := time.Duration(cluc.conf.ClassListConf.WaitCrawTime) * time.Millisecond
 		retryJobTimeout = max(retryJobTimeout, configuredTimeout)
 	}
-	_, err := cluc.doCrawlAttemptWithSingleflight(ctx, retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, retryJobTimeout)
+	_, err = cluc.doCrawlAttemptWithSingleflight(ctx, retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, retryJobTimeout)
 	if err != nil {
 		logh.Errorf("handle refresh retry msg failed stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d: %+v", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, err)
-		return err
+		var handoffErr *retryHandoffError
+		if errors.As(err, &handoffErr) {
+			return false, err
+		}
+		// 下一条重试已发布，或当前错误已判定为终态，可以确认当前消息。
+		return true, err
 	}
 	logh.Infof("handle refresh retry msg succeeded stu_id=%s year=%s semester=%s attempt=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt)
-	return nil
+	return true, nil
 }
 
 func extractJxb(infos []*model.ClassInfoBO) []string {

@@ -80,7 +80,7 @@ func (d *DelayKafka) consumeDelay() error {
 	return d.c.Consume([]string{d.delayTopic}, d.proxyGroupID, d.delaySend)
 }
 
-func (d *DelayKafka) Consume(groupID string, f func(ctx context.Context, key []byte, value []byte) error) error {
+func (d *DelayKafka) Consume(groupID string, f func(ctx context.Context, key []byte, value []byte) (ack bool, err error)) error {
 	if groupID == d.proxyGroupID {
 		return consumer.ErrInvalidGroupID
 	}
