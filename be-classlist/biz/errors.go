@@ -23,7 +23,8 @@ var (
 	ErrCrawlerTemporary = errors.New("temporary class crawler failure")
 
 	// ErrCrawlerAuthentication 表示 Cookie 为空、被重定向到登录页或上游返回 401/403。
-	// 使用相同登录态重试不会恢复，所以该错误是永久错误，不应自动重试。
+	// 课表刷新每次尝试都会重新向用户服务获取并校验 Cookie，因此允许有界重试来恢复
+	// Cookie 校验与实际请求之间的失效竞态；用户服务直接返回的 Unauthenticated 仍不重试。
 	ErrCrawlerAuthentication = errors.New("class crawler authentication failed")
 
 	// ErrCrawlerProtocol 表示响应格式、字段、状态码或课表时间描述不符合当前协议。

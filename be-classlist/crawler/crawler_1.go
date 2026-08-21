@@ -34,7 +34,8 @@ type Crawler struct {
 func NewClassCrawler(pg ProxyGetter, l logger.Logger) *Crawler {
 	newClient := func() interface{} {
 		return &http.Client{
-			Timeout: 40 * time.Second,
+			Timeout:       40 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 			Transport: &http.Transport{
 				MaxIdleConns:        10, // 既然使用sync.Pool管理对象，这个不宜过大
 				IdleConnTimeout:     90 * time.Second,
@@ -108,7 +109,8 @@ func (c *Crawler) GetClassInfoForGraduateStudent(ctx context.Context, stuID, yea
 	resp, err := client.Do(req)
 	if err != nil {
 		logh.Errorf("client.Do err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler1.GetClassInfoForGraduateStudent request failed: %w", err)
+		requestErr := errorx.Errorf("crawler.crawler1.GetClassInfoForGraduateStudent request failed: %w", err)
+		return nil, nil, -1, classifyResponseError(nil, requestErr)
 	}
 	defer resp.Body.Close()
 
@@ -116,12 +118,13 @@ func (c *Crawler) GetClassInfoForGraduateStudent(ctx context.Context, stuID, yea
 	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 	infos, Scs, sum, err := extractUndergraduateData(bodyBytes, stuID, xnm, xqm)
 	if err != nil {
 		logh.Errorf("extractUndergraduateData err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler1.GetClassInfoForGraduateStudent extract failed: %w", err)
+		extractErr := errorx.Errorf("crawler.crawler1.GetClassInfoForGraduateStudent extract failed: %w", err)
+		return nil, nil, -1, classifyPayloadError(bodyBytes, extractErr)
 	}
 	return infos, Scs, sum, nil
 }
@@ -173,7 +176,8 @@ func (c *Crawler) GetClassInfosForUndergraduate(ctx context.Context, stuID, year
 	resp, err := client.Do(req)
 	if err != nil {
 		logh.Errorf("client.Do err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler1.GetClassInfosForUndergraduate request failed: %w", err)
+		requestErr := errorx.Errorf("crawler.crawler1.GetClassInfosForUndergraduate request failed: %w", err)
+		return nil, nil, -1, classifyResponseError(nil, requestErr)
 	}
 	defer resp.Body.Close()
 
@@ -181,12 +185,13 @@ func (c *Crawler) GetClassInfosForUndergraduate(ctx context.Context, stuID, year
 	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 	infos, Scs, sum, err := extractUndergraduateData(bodyBytes, stuID, xnm, xqm)
 	if err != nil {
 		logh.Errorf("extractUndergraduateData err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler1.GetClassInfosForUndergraduate extract failed: %w", err)
+		extractErr := errorx.Errorf("crawler.crawler1.GetClassInfosForUndergraduate extract failed: %w", err)
+		return nil, nil, -1, classifyPayloadError(bodyBytes, extractErr)
 	}
 
 	return infos, Scs, sum, nil
