@@ -62,19 +62,9 @@ func (p *Producer) SendMessage(ctx context.Context, key, value []byte) error {
 		return err
 	}
 
-	resultCh := make(chan error, 1)
-	go func() {
-		_, _, err := p.kp.SendMessage(msg)
-		resultCh <- err
-	}()
-
-	var err error
-	select {
-	case err = <-resultCh:
-	case <-ctx.Done():
-		err = ctx.Err()
-	}
+	_, _, err := p.kp.SendMessage(msg)
 	if err != nil {
+		span.RecordError(err)
 		p.recordFailure(err)
 		return err
 	}

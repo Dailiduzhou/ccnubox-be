@@ -7,7 +7,9 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/conf"
 )
 
-func InitKafka(cfg *conf.KafkaConf) sarama.Client {
+type KafkaConfigOption func(*sarama.Config)
+
+func InitKafka(cfg *conf.KafkaConf, options ...KafkaConfigOption) sarama.Client {
 	saramaCfg := sarama.NewConfig()
 
 	saramaCfg.Net.SASL.Enable = true
@@ -17,6 +19,11 @@ func InitKafka(cfg *conf.KafkaConf) sarama.Client {
 
 	saramaCfg.Producer.Return.Successes = true
 	saramaCfg.Producer.Partitioner = sarama.NewConsistentCRCHashPartitioner
+	for _, option := range options {
+		if option != nil {
+			option(saramaCfg)
+		}
+	}
 
 	client, err := sarama.NewClient(cfg.Addrs, saramaCfg)
 	if err != nil {
