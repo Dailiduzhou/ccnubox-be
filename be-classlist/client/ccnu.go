@@ -23,7 +23,7 @@ func (c *CCNUService) GetCookie(ctx context.Context, stuID string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("get cookie from user service: %w", err)
 	}
-	if resp == nil {
+	if resp == nil || resp.Cookie == "" {
 		return "", fmt.Errorf("get cookie from user service: %w", biz.ErrCookieUnavailable)
 	}
 	return resp.Cookie, nil
