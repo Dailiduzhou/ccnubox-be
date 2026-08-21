@@ -587,28 +587,55 @@ func (cluc *ClassUsecase) startRetryConsumer() {
 	}()
 }
 
-func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, value []byte) error {
-	logh := cluc.log.WithContext(ctx)
-
+func decodeRefreshRetryMessage(value []byte) (refreshRetryMessage, error) {
 	var retryInfo refreshRetryMessage
 	if err := json.Unmarshal(value, &retryInfo); err != nil {
 		logh.Errorf("unmarshal refresh retry msg failed: value=%s, err=%+v", string(value), err)
 		return fmt.Errorf("unmarshal refresh retry message: %w", err)
 	}
 	if retryInfo.StuID == "" || retryInfo.Year == "" || retryInfo.Semester == "" {
-		logh.Errorf("invalid refresh retry msg: value=%s", string(value))
-		return fmt.Errorf("invalid refresh retry message: missing required field")
+		return refreshRetryMessage{}, errors.New("invalid refresh retry message: missing required field")
 	}
-	if retryInfo.Version != refreshRetryMessageVersion {
-		logh.Errorf("unsupported refresh retry msg version: value=%s", string(value))
-		return fmt.Errorf("unsupported refresh retry message version: %d", retryInfo.Version)
-	}
-	if retryInfo.MaxAttempts <= 0 || retryInfo.MaxAttempts > maxRefreshRetryAttempts {
+
+	// 兼容旧消息
+	switch retryInfo.Version {
+	case 0:
+		if retryInfo.Attempt != 0 || retryInfo.MaxAttempts != 0 {
+			return refreshRetryMessage{}, fmt.Errorf(
+				"invalid legacy refresh retry message: attempt=%d max_attempts=%d",
+				retryInfo.Attempt,
+				retryInfo.MaxAttempts,
+			)
+		}
+		retryInfo.Version = refreshRetryMessageVersion
+		retryInfo.Attempt = 1
 		retryInfo.MaxAttempts = maxRefreshRetryAttempts
+	case refreshRetryMessageVersion:
+		if retryInfo.MaxAttempts <= 0 || retryInfo.MaxAttempts > maxRefreshRetryAttempts {
+			retryInfo.MaxAttempts = maxRefreshRetryAttempts
+		}
+	default:
+		return refreshRetryMessage{}, fmt.Errorf("unsupported refresh retry message version: %d", retryInfo.Version)
 	}
+
 	if retryInfo.Attempt < 1 || retryInfo.Attempt > retryInfo.MaxAttempts {
-		logh.Errorf("invalid refresh retry attempt: attempt=%d max_attempts=%d value=%s", retryInfo.Attempt, retryInfo.MaxAttempts, string(value))
-		return fmt.Errorf("invalid refresh retry attempt: attempt=%d max_attempts=%d", retryInfo.Attempt, retryInfo.MaxAttempts)
+		return refreshRetryMessage{}, fmt.Errorf(
+			"invalid refresh retry attempt: attempt=%d max_attempts=%d",
+			retryInfo.Attempt,
+			retryInfo.MaxAttempts,
+		)
+	}
+	return retryInfo, nil
+}
+
+func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, value []byte) (bool, error) {
+	logh := cluc.log.WithContext(ctx)
+
+	retryInfo, err := decodeRefreshRetryMessage(value)
+	if err != nil {
+		logh.Errorf("invalid refresh retry msg: value=%s, err=%+v", string(value), err)
+		// 没有 DLQ 时确认非法消息，避免 poison message 永久阻塞分区。
+		return true, err
 	}
 
 	logh.Infof("consume refresh retry msg stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts)
