@@ -22,6 +22,7 @@ var (
 	INTERNET_ERROR    = errorx.FormatErrorFunc(elecpricev1.ErrorInternetError("网络错误"))
 	FIND_CONFIG_ERROR = errorx.FormatErrorFunc(elecpricev1.ErrorFindConfigError("获取配置失败"))
 	SAVE_CONFIG_ERROR = errorx.FormatErrorFunc(elecpricev1.ErrorSaveConfigError("保存配置失败"))
+	PARAM_ERROR       = errorx.FormatErrorFunc(elecpricev1.ErrorParamError("参数错误"))
 )
 
 const roomCacheWorkers = 16
@@ -52,6 +53,10 @@ func NewElecpriceService(elecpriceDAO dao.ElecpriceDAO, l logger.Logger, c cache
 }
 
 func (s *elecpriceService) SetStandard(ctx context.Context, r *domain.SetStandardRequest) error {
+	if r.StudentId == "" || r.Standard == nil || r.Standard.RoomId == "" || r.Standard.Limit <= 0 {
+		return PARAM_ERROR(errorx.New("invalid set standard param"))
+	}
+
 	conf := &model.ElecpriceConfig{
 		StudentID: r.StudentId,
 		Limit:     r.Standard.Limit,
@@ -68,6 +73,10 @@ func (s *elecpriceService) SetStandard(ctx context.Context, r *domain.SetStandar
 }
 
 func (s *elecpriceService) GetStandardList(ctx context.Context, r *domain.GetStandardListRequest) (*domain.GetStandardListResponse, error) {
+	if r.StudentId == "" {
+		return nil, PARAM_ERROR(errorx.New("invalid get standard list param"))
+	}
+
 	res, err := s.elecpriceDAO.FindAll(ctx, r.StudentId)
 	if err != nil {
 		return nil, FIND_CONFIG_ERROR(errorx.Errorf("service: find standard list failed, sid: %s, err: %w", r.StudentId, err))
@@ -86,6 +95,10 @@ func (s *elecpriceService) GetStandardList(ctx context.Context, r *domain.GetSta
 }
 
 func (s *elecpriceService) CancelStandard(ctx context.Context, r *domain.CancelStandardRequest) error {
+	if r.StudentId == "" || r.RoomId == "" {
+		return PARAM_ERROR(errorx.New("invalid cancel standard param"))
+	}
+
 	err := s.elecpriceDAO.Delete(ctx, r.StudentId, r.RoomId)
 	if err != nil {
 		return errorx.Errorf("service: delete standard failed, sid: %s, rid: %s, err: %w", r.StudentId, r.RoomId, err)
@@ -162,7 +175,7 @@ func (s *elecpriceService) GetTobePushMSG(ctx context.Context) ([]*domain.Electr
 func (s *elecpriceService) GetArchitecture(ctx context.Context, area string) (domain.ResultArchitectureInfo, error) {
 	code, ok := ConstantMap[area]
 	if !ok {
-		return domain.ResultArchitectureInfo{}, errorx.Errorf("service: area not found in constant map: %s", area)
+		return domain.ResultArchitectureInfo{}, PARAM_ERROR(errorx.New("invalid area name"))
 	}
 
 	var resp domain.ResultArchitectureInfo
@@ -205,6 +218,10 @@ func (s *elecpriceService) GetArchitecture(ctx context.Context, area string) (do
 }
 
 func (s *elecpriceService) GetRoomInfo(ctx context.Context, archiID string, floor string) (domain.RoomInfoList, error) {
+	if archiID == "" || floor == "" {
+		return domain.RoomInfoList{}, PARAM_ERROR(errorx.New("invalid room info param"))
+	}
+
 	var resp domain.RoomInfoList
 
 	// 1. 尝试缓存
@@ -260,6 +277,10 @@ func (s *elecpriceService) GetRoomInfo(ctx context.Context, archiID string, floo
 }
 
 func (s *elecpriceService) GetPriceByName(ctx context.Context, roomName string) (*domain.Prices, error) {
+	if roomName == "" {
+		return nil, PARAM_ERROR(errorx.New("invalid room name"))
+	}
+
 	var (
 		resp   = new(domain.Prices)
 		detail domain.RoomInfo
@@ -303,6 +324,10 @@ func (s *elecpriceService) GetPriceByName(ctx context.Context, roomName string) 
 }
 
 func (s *elecpriceService) GetPriceById(ctx context.Context, roomid string) (*domain.PriceInfo, error) {
+	if roomid == "" {
+		return nil, PARAM_ERROR(errorx.New("invalid room id"))
+	}
+
 	mid, err := s.GetMeterID(ctx, roomid)
 	if err != nil {
 		return nil, err

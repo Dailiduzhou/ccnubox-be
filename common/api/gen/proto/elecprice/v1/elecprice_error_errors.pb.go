@@ -46,3 +46,15 @@ func IsSaveConfigError(err error) bool {
 func ErrorSaveConfigError(format string, args ...interface{}) *errors.Error {
 	return errors.New(503, ErrorReason_SAVE_CONFIG_ERROR.String(), fmt.Sprintf(format, args...))
 }
+
+func IsParamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	e := errors.FromError(err)
+	return e.Reason == ErrorReason_PARAM_ERROR.String() && e.Code == 400
+}
+
+func ErrorParamError(format string, args ...interface{}) *errors.Error {
+	return errors.New(400, ErrorReason_PARAM_ERROR.String(), fmt.Sprintf(format, args...))
+}

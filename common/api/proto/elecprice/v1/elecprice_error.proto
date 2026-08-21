@@ -11,4 +11,5 @@ enum ErrorReason {
   INTERNET_ERROR = 0 [(errors.code) = 501];
   FIND_CONFIG_ERROR = 1 [(errors.code) = 502];
   SAVE_CONFIG_ERROR = 2 [(errors.code) = 503];
+  PARAM_ERROR = 3 [(errors.code) = 400];
 }
