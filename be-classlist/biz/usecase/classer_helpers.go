@@ -595,8 +595,7 @@ func (cluc *ClassUsecase) startRetryConsumer() {
 func decodeRefreshRetryMessage(value []byte) (refreshRetryMessage, error) {
 	var retryInfo refreshRetryMessage
 	if err := json.Unmarshal(value, &retryInfo); err != nil {
-		logh.Errorf("unmarshal refresh retry msg failed: value=%s, err=%+v", string(value), err)
-		return fmt.Errorf("unmarshal refresh retry message: %w", err)
+		return refreshRetryMessage{}, fmt.Errorf("unmarshal refresh retry message: %w", err)
 	}
 	if retryInfo.StuID == "" || retryInfo.Year == "" || retryInfo.Semester == "" {
 		return refreshRetryMessage{}, errors.New("invalid refresh retry message: missing required field")
