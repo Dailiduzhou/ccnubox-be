@@ -228,8 +228,10 @@ func (cluc *ClassUsecase) filterAddedClassesConflictingWithOfficial(ctx context.
 }
 
 // 合并同一课表的并发刷新。调用者只控制自己的等待；共享任务不会被首个调用者取消。
-func classRefreshSingleflightKey(stuID, year, semester string) string {
-	return fmt.Sprintf("craw:%s:%s:%s", stuID, year, semester)
+func classRefreshSingleflightKey(stuID, year, semester string, attempt, maxAttempts int) string {
+	// attempt 会影响失败后的重试调度，不能让不同重试阶段共享同一个闭包。
+	// 否则重试消息可能合入 attempt=0 的普通刷新并把计数重置为 1。
+	return fmt.Sprintf("craw:%s:%s:%s:attempt:%d:max:%d", stuID, year, semester, attempt, maxAttempts)
 }
 
 func (cluc *ClassUsecase) doCrawlWithSingleflight(ctx context.Context, stuID, year, semester string, jobTimeout time.Duration) ([]*model.ClassInfoBO, error) {
