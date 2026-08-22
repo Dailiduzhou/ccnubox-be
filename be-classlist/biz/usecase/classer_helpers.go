@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	refreshRetryConsumerGroup  = "be-classlist-refresh-retry-worker-v1"
+	refreshRetryConsumerGroup  = "be-classlist-refresh-retry-worker"
 	refreshRetryMessageVersion = 1
 	maxRefreshRetryAttempts    = 3
 	defaultRefreshJobTimeout   = 15 * time.Second

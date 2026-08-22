@@ -381,9 +381,9 @@ func (c *Consumer) Consume(topics []string, groupID string, handler sarama.Consu
 				return err
 			}
 			consecutiveFailures++
-			if consecutiveFailures >= maxImmediateRetryAttempts {
-				return err
-			}
+			// Consumer Group 的临时基础设施错误不能让后台消费者永久退出。
+			// 这里持续做有上限、可取消的退避重连；消息处理本身仍由
+			// handleWithRetry/processMessage 保持有限次数，避免 poison message 阻塞分区。
 			c.log.Errorf("consumer group %s session ended with temporary error, retrying in %v: attempt=%d err=%v",
 				groupID, backoff, consecutiveFailures, err)
 			if !sleepWithContext(c.cctx, backoff) {
