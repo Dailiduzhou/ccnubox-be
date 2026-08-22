@@ -92,20 +92,20 @@ func (c *Crawler3) GetClassInfosForUndergraduate(ctx context.Context, stuID, yea
 	resp, err := client.Client.Do(req)
 	if err != nil {
 		logh.Errorf("client.Do err=%v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(nil, fmt.Errorf("crawler3 undergraduate request failed: %w", err))
 	}
 	defer resp.Body.Close()
 
 	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("read body failed:%v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 
 	infos, err := c.extractCourses(ctx, year, semester, body)
 	if err != nil {
 		logh.Errorf("failed to extract infos: %v", err)
-		return nil, nil, -1, fmt.Errorf("failed to extract infos: %v", err)
+		return nil, nil, -1, classifyPayloadError(body, fmt.Errorf("crawler3 undergraduate extract failed: %w", err))
 	}
 
 	scs := make([]*model.StudentCourseBO, 0, len(infos))
@@ -347,7 +347,8 @@ func (c *Crawler3) GetClassInfoForGraduateStudent(ctx context.Context, stuID, ye
 	resp, err := client.Client.Do(req)
 	if err != nil {
 		logh.Errorf("client.Do err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler3.GetClassInfoForGraduateStudent request failed: %w", err)
+		requestErr := errorx.Errorf("crawler.crawler3.GetClassInfoForGraduateStudent request failed: %w", err)
+		return nil, nil, -1, classifyResponseError(nil, requestErr)
 	}
 	defer resp.Body.Close()
 
@@ -355,12 +356,12 @@ func (c *Crawler3) GetClassInfoForGraduateStudent(ctx context.Context, stuID, ye
 	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 	infos, Scs, sum, err := extractGraduateData(bodyBytes, stuID, xnm, xqm)
 	if err != nil {
 		logh.Errorf("extractUndergraduateData err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler3.GetClassInfoForGraduateStudent extract failed: %w", err)
+		return nil, nil, -1, classifyPayloadError(bodyBytes, fmt.Errorf("crawler3 graduate extract failed: %w", err))
 	}
 	return infos, Scs, sum, nil
 }

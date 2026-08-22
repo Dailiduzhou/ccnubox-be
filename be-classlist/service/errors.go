@@ -16,4 +16,6 @@ var (
 	ClassAlreadyExistsError    = errorx.FormatErrorFunc(classlistv1.ErrorClassisexist("已有该课程"))
 	ConfigError                = errorx.FormatErrorFunc(classlistv1.ErrorConfigError("配置错误"))
 	ClassScheduleConflictError = errorx.FormatErrorFunc(classlistv1.ErrorErrClassScheduleConflict("添加课程时间冲突"))
+	CrawlerError               = errorx.FormatErrorFunc(classlistv1.ErrorCrawlerError("课程爬取失败"))
+	CCNULoginError             = errorx.FormatErrorFunc(classlistv1.ErrorCCNULoginError("教务系统登录态失效"))
 )

@@ -3,6 +3,7 @@ package consumer
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"time"
 
@@ -62,6 +63,38 @@ func (c *DelaySendHandler) Cleanup(sarama.ConsumerGroupSession) error {
 
 func (c *DelaySendHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
+		if !c.processMessage(session, message) {
+			// session 已结束（rebalance 或关闭），当前消息未提交，下个 generation 会重新投递。
+			// 这里必须返回 nil：sarama 只把 ConsumeClaim 的错误交给 handleError，
+			// 并不会结束 session，返回错误只会让本分区在剩余 session 里静默停摆。
+			return nil
+		}
+		session.MarkMessage(message, "")
+	}
+	return nil
+}
+
+// processMessage 等待消息到期并转发，临时失败则做有限次原地退避重试。
+// 返回 false 表示 session 已结束，当前消息不得提交 offset。
+func (c *DelaySendHandler) processMessage(session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) bool {
+	// 未到期就原地等到期。分区内消息按投递时间有序，阻塞本分区正是延迟队列想要的语义。
+	for {
+		dur := time.Since(message.Timestamp)
+		if dur >= c.delayTime {
+			break
+		}
+		if !sleepWithContext(session.Context(), c.delayTime-dur) {
+			return false
+		}
+	}
+
+	// 严重滞后的消息直接丢弃，不再转发。
+	if c.delayTime > 0 && time.Since(message.Timestamp) >= 20*c.delayTime {
+		return true
+	}
+
+	backoff := initialRetryBackoff
+	for attempt := 1; ; attempt++ {
 		ctx := otel.GetTextMapPropagator().Extract(context.Background(), otelsarama.NewConsumerMessageCarrier(message))
 
 		tracer := otel.Tracer("delay-queue-consume")
@@ -70,30 +103,11 @@ func (c *DelaySendHandler) ConsumeClaim(session sarama.ConsumerGroupSession, cla
 		)
 
 		tlog := c.log.WithContext(ctx)
-		dur := time.Since(message.Timestamp)
+		tlog.Debugf("Message claimed: key:%s, value:%s, time_sub:%v",
+			string(message.Key), string(message.Value), time.Since(message.Timestamp))
 
-		tlog.Debugf("Message claimed: key:%s, value:%s, time_sub:%v", string(message.Key), string(message.Value), dur)
-
-		if dur >= c.delayTime {
-			if c.delayTime > 0 && dur >= 20*c.delayTime {
-				session.MarkMessage(message, "")
-				span.End()
-				continue
-			}
-
-			err := c.forwardMessage(ctx, message)
-			if err != nil {
-				tlog.Errorf("Error forwarding message: %s", string(message.Value))
-				if c.mqFailedTotal != nil {
-					c.mqFailedTotal.WithLabelValues(c.topic, classifyError(err)).Inc()
-				}
-				// 失败也要提交 offset, 否则 rebalance/重启后会无限重投同一条消息。
-				// 真正的重试/告警应该走独立的失败队列或外部告警通道, 不在消费循环里死磕。
-				session.MarkMessage(message, "")
-				span.End()
-				return nil
-			}
-
+		err := c.forwardMessage(ctx, message)
+		if err == nil {
 			// 消费计数
 			if c.producedTotal != nil {
 				c.producedTotal.WithLabelValues(c.topic, "OK").Inc()
@@ -101,17 +115,40 @@ func (c *DelaySendHandler) ConsumeClaim(session sarama.ConsumerGroupSession, cla
 			if c.consumedTotal != nil {
 				c.consumedTotal.WithLabelValues(c.delayTopic, "OK").Inc()
 			}
-
-			session.MarkMessage(message, "")
 			span.End()
-			continue
+			return true
 		}
 
+		tlog.Errorf("Error forwarding message: %s: %v", string(message.Value), err)
+		span.RecordError(err)
+		if c.mqFailedTotal != nil {
+			c.mqFailedTotal.WithLabelValues(c.topic, classifyError(err)).Inc()
+		}
+
+		// 保持原有行为：永久错误和未知错误记录后确认，避免毒消息永久阻塞分区。
+		if !isRetryableKafkaError(err) {
+			tlog.Errorf("Non-retryable forwarding error, acknowledging message: topic=%s partition=%d offset=%d err=%v",
+				message.Topic, message.Partition, message.Offset, err)
+			span.End()
+			return true
+		}
+		// 临时错误只做有限次原地重试；耗尽后仍按原有行为确认消息。
+		if attempt >= maxImmediateRetryAttempts {
+			tlog.Errorf("Forwarding retries exhausted, acknowledging message: topic=%s partition=%d offset=%d attempts=%d err=%v",
+				message.Topic, message.Partition, message.Offset, attempt, err)
+			span.End()
+			return true
+		}
+
+		tlog.Warnf("Retrying message forwarding in %v: topic=%s partition=%d offset=%d attempt=%d",
+			backoff, message.Topic, message.Partition, message.Offset, attempt)
 		span.End()
-		time.Sleep(time.Second)
-		return nil
+
+		if !sleepWithContext(session.Context(), backoff) {
+			return false
+		}
+		backoff = nextBackoff(backoff)
 	}
-	return nil
 }
 
 func (c *DelaySendHandler) forwardMessage(ctx context.Context, msg *sarama.ConsumerMessage) error {
@@ -132,13 +169,13 @@ func (c *DelaySendHandler) forwardMessage(ctx context.Context, msg *sarama.Consu
 
 // FuncConsumeHandler 消费真实 topic 消息并交付给应用
 type FuncConsumeHandler struct {
-	f             func(ctx context.Context, key []byte, value []byte)
+	f             func(ctx context.Context, key []byte, value []byte) (ack bool, err error)
 	log           logger.Logger
 	consumedTotal *prometheus.CounterVec
 	mqFailedTotal *prometheus.CounterVec
 }
 
-func NewFuncConsumeHandler(f func(ctx context.Context, key []byte, value []byte), l logger.Logger, m *metricsx.Metrics) FuncConsumeHandler {
+func NewFuncConsumeHandler(f func(ctx context.Context, key []byte, value []byte) (ack bool, err error), l logger.Logger, m *metricsx.Metrics) FuncConsumeHandler {
 	return FuncConsumeHandler{
 		f:             f,
 		log:           l,
@@ -159,6 +196,20 @@ func (fc FuncConsumeHandler) Cleanup(sarama.ConsumerGroupSession) error {
 
 func (fc FuncConsumeHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
+		if !fc.handleWithRetry(session, message) {
+			return nil
+		}
+		// 业务失败也可以确认：例如下一条延迟重试已发布，或错误已判定为终态。
+		session.MarkMessage(message, "")
+	}
+	return nil
+}
+
+// handleWithRetry 对未确认消息做有限次原地重试。
+// 返回 false 表示 session 已结束，当前消息不得提交 offset。
+func (fc FuncConsumeHandler) handleWithRetry(session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) bool {
+	backoff := initialRetryBackoff
+	for attempt := 1; ; attempt++ {
 		ctx := otel.GetTextMapPropagator().Extract(context.Background(), otelsarama.NewConsumerMessageCarrier(message))
 
 		tracer := otel.Tracer("real-topic")
@@ -169,49 +220,180 @@ func (fc FuncConsumeHandler) ConsumeClaim(session sarama.ConsumerGroupSession, c
 		tlog := fc.log.WithContext(ctx)
 
 		tlog.Debugf("Message claimed: key:%s, value:%s", string(message.Key), string(message.Value))
-		fc.f(ctx, message.Key, message.Value)
-
-		if fc.consumedTotal != nil {
+		ack, err := fc.f(ctx, message.Key, message.Value)
+		if !ack && err == nil {
+			err = errors.New("message requested retry without an error")
+		}
+		if err != nil {
+			tlog.Errorf("Error handling message: %v", err)
+			span.RecordError(err)
+			if fc.consumedTotal != nil {
+				fc.consumedTotal.WithLabelValues(message.Topic, "Error").Inc()
+			}
+			if fc.mqFailedTotal != nil {
+				fc.mqFailedTotal.WithLabelValues(message.Topic, classifyError(err)).Inc()
+			}
+		} else if fc.consumedTotal != nil {
 			fc.consumedTotal.WithLabelValues(message.Topic, "OK").Inc()
 		}
-		session.MarkMessage(message, "")
-
 		span.End()
+
+		if ack {
+			return true
+		}
+		// 保持原有行为：有限重试耗尽后确认消息，避免永久阻塞当前分区。
+		if attempt >= maxImmediateRetryAttempts {
+			tlog.Errorf("Message retries exhausted, acknowledging message: topic=%s partition=%d offset=%d attempts=%d err=%v",
+				message.Topic, message.Partition, message.Offset, attempt, err)
+			return true
+		}
+
+		tlog.Warnf("Message not acked, retrying in %v: topic=%s partition=%d offset=%d attempt=%d",
+			backoff, message.Topic, message.Partition, message.Offset, attempt)
+		if !sleepWithContext(session.Context(), backoff) {
+			return false
+		}
+		backoff = nextBackoff(backoff)
 	}
-	return nil
+}
+
+const maxImmediateRetryAttempts = 4
+
+var (
+	initialRetryBackoff = time.Second
+	maxRetryBackoff     = 30 * time.Second
+)
+
+// sleepWithContext 退避等待。返回 false 表示 ctx 已结束（rebalance 或关闭），
+// 调用方必须立即退出并且不得提交当前 offset。
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextBackoff(cur time.Duration) time.Duration {
+	next := cur * 2
+	if next > maxRetryBackoff {
+		return maxRetryBackoff
+	}
+	return next
+}
+
+// isRetryableKafkaError 只对白名单中的明确临时错误返回 true。
+// 永久错误和未知错误默认不重试，以保持原有的确认行为。
+func isRetryableKafkaError(err error) bool {
+	var producerErr *sarama.ProducerError
+	if errors.As(err, &producerErr) {
+		err = producerErr.Err
+	}
+
+	if errors.Is(err, sarama.ErrOutOfBrokers) ||
+		errors.Is(err, sarama.ErrLeaderNotAvailable) ||
+		errors.Is(err, sarama.ErrNotLeaderForPartition) ||
+		errors.Is(err, sarama.ErrRequestTimedOut) ||
+		errors.Is(err, sarama.ErrNotEnoughReplicas) ||
+		errors.Is(err, sarama.ErrNotEnoughReplicasAfterAppend) ||
+		errors.Is(err, sarama.ErrUnknownTopicOrPartition) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func isRetryableConsumerGroupError(err error) bool {
+	return isRetryableKafkaError(err) ||
+		errors.Is(err, sarama.ErrNotCoordinatorForConsumer) ||
+		errors.Is(err, sarama.ErrConsumerCoordinatorNotAvailable) ||
+		errors.Is(err, sarama.ErrOffsetsLoadInProgress) ||
+		errors.Is(err, sarama.ErrRebalanceInProgress)
 }
 
 type Consumer struct {
 	cctx       context.Context
 	cancelFunc context.CancelFunc
-	client     sarama.Client
+	newClient  ClientFactory
+	newGroup   consumerGroupFactory
 	log        logger.Logger
 }
 
-func NewConsumer(client sarama.Client, l logger.Logger) *Consumer {
+type ClientFactory func() sarama.Client
+
+type consumerGroupFactory func(groupID string, client sarama.Client) (sarama.ConsumerGroup, error)
+
+func NewConsumer(newClient ClientFactory, l logger.Logger) *Consumer {
 	cctx, cancel := context.WithCancel(context.Background())
 	return &Consumer{
 		cctx:       cctx,
 		cancelFunc: cancel,
-		client:     client,
+		newClient:  newClient,
+		newGroup:   sarama.NewConsumerGroupFromClient,
 		log:        l,
 	}
 }
 
 func (c *Consumer) Consume(topics []string, groupID string, handler sarama.ConsumerGroupHandler) error {
-	cg, err := sarama.NewConsumerGroupFromClient(groupID, c.client)
+	// ConsumerGroup 不共用 Client
+	if c.newClient == nil {
+		return ErrNilClient
+	}
+	client := c.newClient()
+	if client == nil {
+		return ErrNilClient
+	}
+	cg, err := c.newGroup(groupID, client)
 	if err != nil {
+		if closeErr := client.Close(); closeErr != nil {
+			c.log.Errorf("Error closing Kafka client after consumer group creation failed: %v", closeErr)
+		}
 		return err
 	}
-	defer cg.Close()
-
-	for {
-		if err := cg.Consume(c.cctx, topics, handler); err != nil {
-			return err
+	defer func() {
+		// Client 生命周期比 ConsumerGroup 长
+		if err := cg.Close(); err != nil {
+			c.log.Errorf("Error closing consumer group %s: %v", groupID, err)
 		}
+		if err := client.Close(); err != nil {
+			c.log.Errorf("Error closing Kafka client for consumer group %s: %v", groupID, err)
+		}
+	}()
+
+	backoff := initialRetryBackoff
+	consecutiveFailures := 0
+	for {
+		err := cg.Consume(c.cctx, topics, handler)
 		if c.cctx.Err() != nil {
 			return c.cctx.Err()
 		}
+		if err != nil {
+			// 永久错误和未知错误保持原有行为，直接返回给调用方。
+			if !isRetryableConsumerGroupError(err) {
+				return err
+			}
+			consecutiveFailures++
+			// Consumer Group 的临时基础设施错误不能让后台消费者永久退出。
+			// 这里持续做有上限、可取消的退避重连；消息处理本身仍由
+			// handleWithRetry/processMessage 保持有限次数，避免 poison message 阻塞分区。
+			c.log.Errorf("consumer group %s session ended with temporary error, retrying in %v: attempt=%d err=%v",
+				groupID, backoff, consecutiveFailures, err)
+			if !sleepWithContext(c.cctx, backoff) {
+				return c.cctx.Err()
+			}
+			backoff = nextBackoff(backoff)
+			continue
+		}
+		backoff = initialRetryBackoff
+		consecutiveFailures = 0
 	}
 }
 
@@ -222,7 +404,10 @@ func (c *Consumer) Close() {
 	}
 }
 
-var ErrInvalidGroupID = errors.New("the groupID is not allowed")
+var (
+	ErrInvalidGroupID = errors.New("the groupID is not allowed")
+	ErrNilClient      = errors.New("kafka client factory returned nil")
+)
 
 // classifyError 将 Kafka/Sarama 错误分类，用于 mq_failed_total 标签
 func classifyError(err error) string {

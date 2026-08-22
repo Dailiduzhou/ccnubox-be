@@ -20,8 +20,11 @@ func (c *CCNUService) GetCookie(ctx context.Context, stuID string) (string, erro
 	resp, err := c.user.GetCookie(ctx, &userv1.GetCookieRequest{
 		StudentId: stuID,
 	})
-	if err != nil || resp == nil {
-		return "", fmt.Errorf("No cookie was fetched from user service err=%v", err)
+	if err != nil {
+		return "", fmt.Errorf("get cookie from user service: %w", err)
+	}
+	if resp == nil || resp.Cookie == "" {
+		return "", fmt.Errorf("get cookie from user service: %w", biz.ErrCookieUnavailable)
 	}
 	return resp.Cookie, nil
 }

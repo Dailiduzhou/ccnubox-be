@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz/model"
 	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/tool"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
@@ -39,7 +40,8 @@ type Crawler2 struct {
 func NewClassCrawler2(pg ProxyGetter, l logger.Logger) *Crawler2 {
 	newClient := func() interface{} {
 		return &http.Client{
-			Timeout: 40 * time.Second,
+			Timeout:       40 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 			Transport: &http.Transport{
 				MaxIdleConns:        10, // 既然使用sync.Pool管理对象，这个不宜过大
 				IdleConnTimeout:     90 * time.Second,
@@ -111,20 +113,20 @@ func (c *Crawler2) GetClassInfosForUndergraduate(ctx context.Context, stuID, yea
 	resp, err := client.Do(req)
 	if err != nil {
 		logh.Errorf("client.Do err=%v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(nil, fmt.Errorf("crawler2 undergraduate request failed: %w", err))
 	}
 	defer resp.Body.Close()
 
 	body, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("read body failed:%v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 
 	infos, err := c.extractCourses(ctx, year, semester, body)
 	if err != nil {
 		logh.Errorf("failed to extract infos: %v", err)
-		return nil, nil, -1, fmt.Errorf("failed to extract infos: %v", err)
+		return nil, nil, -1, classifyPayloadError(body, fmt.Errorf("crawler2 undergraduate extract failed: %w", err))
 	}
 
 	scs := make([]*model.StudentCourseBO, 0, len(infos))
@@ -178,7 +180,8 @@ func (c *Crawler2) GetClassInfoForGraduateStudent(ctx context.Context, stuID, ye
 	resp, err := client.Do(req)
 	if err != nil {
 		logh.Errorf("client.Do err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler2.GetClassInfoForGraduateStudent request failed: %w", err)
+		requestErr := errorx.Errorf("crawler.crawler2.GetClassInfoForGraduateStudent request failed: %w", err)
+		return nil, nil, -1, classifyResponseError(nil, requestErr)
 	}
 	defer resp.Body.Close()
 
@@ -186,12 +189,13 @@ func (c *Crawler2) GetClassInfoForGraduateStudent(ctx context.Context, stuID, ye
 	bodyBytes, err := httpx.ReadResponse(resp)
 	if err != nil {
 		logh.Errorf("failed to read response body: %v", err)
-		return nil, nil, -1, err
+		return nil, nil, -1, classifyResponseError(resp, err)
 	}
 	infos, Scs, sum, err := extractGraduateData(bodyBytes, stuID, xnm, xqm)
 	if err != nil {
 		logh.Errorf("extractUndergraduateData err=%v", err)
-		return nil, nil, -1, errorx.Errorf("crawler.crawler2.GetClassInfoForGraduateStudent extract failed: %w", err)
+		extractErr := errorx.Errorf("crawler.crawler2.GetClassInfoForGraduateStudent extract failed: %w", err)
+		return nil, nil, -1, classifyPayloadError(bodyBytes, extractErr)
 	}
 	return infos, Scs, sum, nil
 }
@@ -206,9 +210,12 @@ func (c *Crawler2) getys(year, semester string) string {
 
 func (c *Crawler2) extractCourses(ctx context.Context, year, semester string, html []byte) ([]*model.ClassInfoBO, error) {
 	logh := c.log.WithContext(ctx)
+	if looksLikeAuthenticationPage(html) {
+		return nil, fmt.Errorf("%w: undergraduate endpoint returned a login page", biz.ErrCrawlerAuthentication)
+	}
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(html))
 	if err != nil {
-		return nil, fmt.Errorf("NewDocumentFromReader err: %v", err)
+		return nil, fmt.Errorf("NewDocumentFromReader err: %w", err)
 	}
 
 	var classInfos []*model.ClassInfoBO
@@ -261,6 +268,11 @@ func (c *Crawler2) extractCourses(ctx context.Context, year, semester string, ht
 
 		classInfos = append(classInfos, &classInfo)
 	})
+	if len(classInfos) == 0 {
+		// 该旧版 HTML 爬虫无法可靠区分“空课表”和结构变化后的错误页。宁可保留本地
+		// 快照并报告不可重试错误，也不能把错误页当成空课表写回数据库。
+		return nil, fmt.Errorf("%w: no course elements found in undergraduate response", biz.ErrCrawlerEmptyResult)
+	}
 	return classInfos, nil
 }
 

@@ -39,7 +39,7 @@ func NewDelayKafkaConfig() DelayKafkaConfig {
 	}
 }
 
-func NewDelayKafka(client sarama.Client, cf DelayKafkaConfig, l logger.Logger, m *metricsx.Metrics) (biz.DelayQueue, func(), error) {
+func NewDelayKafka(client sarama.Client, newConsumerClient consumer.ClientFactory, cf DelayKafkaConfig, l logger.Logger, m *metricsx.Metrics) (biz.DelayQueue, func(), error) {
 	dk := &DelayKafka{
 		delayTopic:   cf.DelayTopic,
 		realTopic:    cf.RealTopic,
@@ -57,7 +57,7 @@ func NewDelayKafka(client sarama.Client, cf DelayKafkaConfig, l logger.Logger, m
 	if err != nil {
 		return nil, nil, err
 	}
-	c := consumer.NewConsumer(client, l)
+	c := consumer.NewConsumer(newConsumerClient, l)
 
 	dk.p = p
 	dk.c = c
@@ -80,7 +80,7 @@ func (d *DelayKafka) consumeDelay() error {
 	return d.c.Consume([]string{d.delayTopic}, d.proxyGroupID, d.delaySend)
 }
 
-func (d *DelayKafka) Consume(groupID string, f func(ctx context.Context, key []byte, value []byte)) error {
+func (d *DelayKafka) Consume(groupID string, f func(ctx context.Context, key []byte, value []byte) (ack bool, err error)) error {
 	if groupID == d.proxyGroupID {
 		return consumer.ErrInvalidGroupID
 	}

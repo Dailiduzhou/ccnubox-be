@@ -15,10 +15,15 @@ import (
 
 type Producer struct {
 	topic         string
-	kp            sarama.SyncProducer
+	kp            syncProducer
 	log           logger.Logger
 	producedTotal *prometheus.CounterVec
 	mqFailedTotal *prometheus.CounterVec
+}
+
+type syncProducer interface {
+	SendMessage(msg *sarama.ProducerMessage) (partition int32, offset int64, err error)
+	Close() error
 }
 
 func NewProducer(topic string, client sarama.Client, l logger.Logger, m *metricsx.Metrics) (*Producer, error) {
@@ -51,11 +56,16 @@ func (p *Producer) SendMessage(ctx context.Context, key, value []byte) error {
 		Timestamp: time.Now(),
 	}
 
+	// 包装使用ctx
+	if err := ctx.Err(); err != nil {
+		p.recordFailure(err)
+		return err
+	}
+
 	_, _, err := p.kp.SendMessage(msg)
 	if err != nil {
-		if p.mqFailedTotal != nil {
-			p.mqFailedTotal.WithLabelValues(p.topic, classifyError(err)).Inc()
-		}
+		span.RecordError(err)
+		p.recordFailure(err)
 		return err
 	}
 	if p.producedTotal != nil {
@@ -63,6 +73,12 @@ func (p *Producer) SendMessage(ctx context.Context, key, value []byte) error {
 	}
 	tlog.Debugf("Produced message with key:%s, value:%s", string(key), string(value))
 	return nil
+}
+
+func (p *Producer) recordFailure(err error) {
+	if p.mqFailedTotal != nil {
+		p.mqFailedTotal.WithLabelValues(p.topic, classifyError(err)).Inc()
+	}
 }
 
 func (p *Producer) Close() {
@@ -91,6 +107,12 @@ func classifyError(err error) string {
 	}
 	if errors.Is(err, sarama.ErrInvalidTopic) {
 		return "invalid_topic"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
 	}
 	return "produce_error"
 }

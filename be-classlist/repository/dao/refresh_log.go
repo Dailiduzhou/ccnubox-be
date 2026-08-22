@@ -23,7 +23,7 @@ func NewRefreshLogDAO(base BaseDAO) *RefreshLogDAO {
 // GetLastRefreshTime 返回最后一次刷新成功的时间
 func (r *RefreshLogDAO) GetLastRefreshTime(ctx context.Context, stuID, year, semester, status string, beforeTime time.Time) (*time.Time, error) {
 	var refreshLog model.ClassRefreshLog
-	err := r.GetDB(ctx).WithContext(ctx).Table(model.ClassRefreshLogTableName).
+	err := r.GetDB(ctx).Table(model.ClassRefreshLogTableName).
 		Where("stu_id = ? and year = ? and semester = ? and updated_at < ? and status = ?", stuID, year, semester, beforeTime, status).
 		Order("updated_at desc").First(&refreshLog).Error
 	if err != nil {
@@ -52,7 +52,7 @@ func (r *RefreshLogDAO) InsertRefreshLog(ctx context.Context, stuID, year, semes
 }
 
 func (r *RefreshLogDAO) UpdateRefreshLogStatus(ctx context.Context, logID uint64, status string) error {
-	err := r.GetDB(ctx).WithContext(ctx).Table(model.ClassRefreshLogTableName).
+	err := r.GetDB(ctx).Table(model.ClassRefreshLogTableName).
 		Where("id = ?", logID).
 		Updates(map[string]interface{}{
 			"status":     status,
@@ -67,7 +67,7 @@ func (r *RefreshLogDAO) UpdateRefreshLogStatus(ctx context.Context, logID uint64
 // SearchNewestRefreshLog 查找在指定时间内的最新的一条记录
 func (r *RefreshLogDAO) SearchNewestRefreshLog(ctx context.Context, stuID, year, semester string, endTime time.Time) (*model.ClassRefreshLog, error) {
 	var refreshLog model.ClassRefreshLog
-	err := r.GetDB(ctx).WithContext(ctx).Table(model.ClassRefreshLogTableName).
+	err := r.GetDB(ctx).Table(model.ClassRefreshLogTableName).
 		Where("stu_id = ? and year = ? and semester = ? and updated_at < ?", stuID, year, semester, endTime).
 		Order("updated_at desc").First(&refreshLog).Error
 	if err != nil {
@@ -79,7 +79,7 @@ func (r *RefreshLogDAO) SearchNewestRefreshLog(ctx context.Context, stuID, year,
 // GetRefreshLogByID  查找指定ID的记录
 func (r *RefreshLogDAO) GetRefreshLogByID(ctx context.Context, logID uint64) (*model.ClassRefreshLog, error) {
 	var refreshLog model.ClassRefreshLog
-	err := r.GetDB(ctx).WithContext(ctx).Table(model.ClassRefreshLogTableName).
+	err := r.GetDB(ctx).Table(model.ClassRefreshLogTableName).
 		Where("id = ?", logID).First(&refreshLog).Error
 	if err != nil {
 		return nil, errorx.Errorf("dao.refreshLog.GetRefreshLogByID: logID=%d: %w", logID, err)
@@ -88,7 +88,7 @@ func (r *RefreshLogDAO) GetRefreshLogByID(ctx context.Context, logID uint64) (*m
 }
 
 func (r *RefreshLogDAO) createRefreshLog(ctx context.Context, refreshLog *model.ClassRefreshLog) error {
-	if err := r.GetDB(ctx).WithContext(ctx).Create(refreshLog).Error; err != nil {
+	if err := r.GetDB(ctx).Create(refreshLog).Error; err != nil {
 		return errorx.Errorf("dao.refreshLog.createRefreshLog: %w", err)
 	}
 	return nil

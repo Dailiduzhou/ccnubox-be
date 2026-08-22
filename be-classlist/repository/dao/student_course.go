@@ -39,7 +39,7 @@ func (s *StudentCourseDAO) GetClassMetaData(ctx context.Context, stuID, year, se
 
 	// 执行数据库查询
 	// 约定将事务 db 从上下文中取出
-	db := s.GetDB(ctx).Table(model.StudentCourseTableName).WithContext(ctx)
+	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 	err := db.Select("cla_id", "is_manually_added", "note").
 		Where("stu_id = ? AND year = ? AND semester = ? AND cla_id IN (?)", stuID, year, semester, claIds).
 		Find(&results).Error
@@ -70,7 +70,7 @@ func (s *StudentCourseDAO) GetClassNum(ctx context.Context, stuID, year, semeste
 
 func (s *StudentCourseDAO) AddedCourseExists(ctx context.Context, stuID, year, semester, classID string) bool {
 	var num int64
-	db := s.GetDB(ctx).Table(model.StudentCourseTableName).WithContext(ctx)
+	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 	err := db.Where("stu_id = ? AND year = ? AND semester = ? AND cla_id = ?", stuID, year, semester, classID).Count(&num).Error
 	if err != nil {
 		s.log.WithContext(ctx).Error("Mysql:count student_course failed",
@@ -91,7 +91,7 @@ func (s *StudentCourseDAO) SaveStudentAndCourseToDB(ctx context.Context, sc *mod
 		logh.Warn("insert student_course 0 data")
 		return nil
 	}
-	db := s.GetDB(ctx).Table(model.StudentCourseTableName).WithContext(ctx)
+	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 	err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(sc).Error
 	if err != nil {
 		logh.Errorf("Mysql:create %v in %s failed: %v", sc, model.StudentCourseTableName, err)
@@ -107,7 +107,7 @@ func (s *StudentCourseDAO) SaveManyStudentAndCourseToDB(ctx context.Context, scs
 		return nil
 	}
 
-	db := s.GetDB(ctx).Table(model.StudentCourseTableName).WithContext(ctx)
+	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(scs).Error; err != nil {
 		logh.Errorf("Mysql:create %v in %s failed: %v", scs, model.StudentCourseTableName, err)
@@ -118,7 +118,7 @@ func (s *StudentCourseDAO) SaveManyStudentAndCourseToDB(ctx context.Context, scs
 
 func (s *StudentCourseDAO) DeleteStudentAndCourseByTimeFromDB(ctx context.Context, stuID, year, semester string) error {
 	logh := s.log.WithContext(ctx)
-	db := s.GetDB(ctx).Table(model.StudentCourseTableName).WithContext(ctx)
+	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 	// 注意:只删除非手动添加的课程，即官方课程
 	err := db.Where("year = ? AND semester = ? AND stu_id = ? AND is_manually_added = false", year, semester, stuID).Delete(&model.StudentCourse{}).Error
 	if err != nil {
@@ -134,7 +134,7 @@ func (s *StudentCourseDAO) DeleteAddedStudentCourses(ctx context.Context, stuID,
 	}
 
 	logh := s.log.WithContext(ctx)
-	db := s.GetDB(ctx).Table(model.StudentCourseTableName).WithContext(ctx)
+	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 	err := db.
 		Where("stu_id = ? AND year = ? AND semester = ? AND is_manually_added = true AND cla_id IN ?", stuID, year, semester, classIDs).
 		Delete(&model.StudentCourse{}).Error
@@ -147,7 +147,7 @@ func (s *StudentCourseDAO) DeleteAddedStudentCourses(ctx context.Context, stuID,
 
 func (s *StudentCourseDAO) UpdateCourseNote(ctx context.Context, stuID, year, semester, classID, note string) error {
 	logh := s.log.WithContext(ctx)
-	db := s.GetDB(ctx).Table(model.StudentCourseTableName).WithContext(ctx)
+	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 	err := db.
 		Where("stu_id = ? AND year = ? AND semester = ? AND cla_id = ?", stuID, year, semester, classID).
 		Update("note", note).Error

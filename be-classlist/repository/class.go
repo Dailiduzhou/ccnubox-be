@@ -2,7 +2,6 @@ package repo
 
 import (
 	"context"
-	"errors"
 
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
 	bizModel "github.com/asynccnu/ccnubox-be/be-classlist/biz/model"
@@ -182,8 +181,8 @@ func (cla ClassRepo) UpdateClassNote(ctx context.Context, stuID, year, semester,
 
 // SaveClass 保存课程[删除原本的，添加新的，主要是为了防止感知不到原本的和新增的之间有差异]
 func (cla ClassRepo) SaveClass(ctx context.Context, stuID, year, semester string, classInfos []*bizModel.ClassInfoBO, scs []*bizModel.StudentCourseBO) error {
-	if len(classInfos) == 0 || len(scs) == 0 {
-		return errorx.Errorf("repo.class.SaveClass: classInfos or scs is empty: %w", errors.New("empty input"))
+	if len(classInfos) != len(scs) {
+		return errorx.Errorf("repo.class.SaveClass: inconsistent classInfos and scs lengths: %w", biz.ErrCrawlerProtocol)
 	}
 
 	classInfosdo := make([]*repoModel.ClassInfo, 0, len(classInfos))
