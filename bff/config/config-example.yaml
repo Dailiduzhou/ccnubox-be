@@ -52,6 +52,12 @@ basicAuth:
   username: ""
   password: ""
 
+clientMetrics:
+  clientKey: ""
+  maxBatchSize: 100
+  maxBodyBytes: 65536
+  maxAppVersions: 32
+
 tiered:
   high: 15  #单位是分钟
   middle: 30 #单位是分钟

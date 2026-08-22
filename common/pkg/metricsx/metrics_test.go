@@ -23,6 +23,9 @@ func TestNewWithRegistererReusesAlreadyRegisteredCollectors(t *testing.T) {
 	if first.MQMetrics.FailedTotal != second.MQMetrics.FailedTotal {
 		t.Fatal("expected MQ failed counter to reuse the registered collector")
 	}
+	if first.Client.AppErrorsTotal != second.Client.AppErrorsTotal {
+		t.Fatal("expected client app error counter to reuse the registered collector")
+	}
 }
 
 func TestNewUsesDefaultRegisterer(t *testing.T) {
@@ -31,6 +34,11 @@ func TestNewUsesDefaultRegisterer(t *testing.T) {
 	defer prometheus.DefaultRegisterer.Unregister(m.HTTP.RequestsTotal)
 	defer prometheus.DefaultRegisterer.Unregister(m.Redis.Duration)
 	defer prometheus.DefaultRegisterer.Unregister(m.MQMetrics.FailedTotal)
+	defer prometheus.DefaultRegisterer.Unregister(m.Client.AppErrorsTotal)
+	defer prometheus.DefaultRegisterer.Unregister(m.Client.APIFailuresTotal)
+	defer prometheus.DefaultRegisterer.Unregister(m.Client.StartupDuration)
+	defer prometheus.DefaultRegisterer.Unregister(m.Client.IngestedEventsTotal)
+	defer prometheus.DefaultRegisterer.Unregister(m.Client.RejectedBatches)
 
 	if m.HTTP.RequestsTotal == nil {
 		t.Fatal("expected HTTP requests total to be initialized")
@@ -40,6 +48,32 @@ func TestNewUsesDefaultRegisterer(t *testing.T) {
 	}
 	if m.MQMetrics.FailedTotal == nil {
 		t.Fatal("expected MQ failed total to be initialized")
+	}
+}
+
+func TestNewWithRegistererInitializesClientMetrics(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewWithRegisterer(registry, "ccnubox_test")
+
+	if m.Client == nil || m.Client.AppErrorsTotal == nil || m.Client.StartupDuration == nil {
+		t.Fatal("expected client metrics to be initialized")
+	}
+	// Vec collectors are emitted only after a label set is initialized.
+	m.Client.AppErrorsTotal.WithLabelValues("ios", "1.0.0", "course", "error").Inc()
+	m.Client.StartupDuration.WithLabelValues("ios", "1.0.0").Observe(1)
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	names := make(map[string]bool, len(families))
+	for _, family := range families {
+		names[family.GetName()] = true
+	}
+	if !names["ccnubox_test_app_error_total"] {
+		t.Fatal("expected app error metric family")
+	}
+	if !names["ccnubox_test_app_startup_duration_seconds"] {
+		t.Fatal("expected startup duration metric family")
 	}
 }
 

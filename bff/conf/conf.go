@@ -23,8 +23,9 @@ type ServerConf struct {
 	JWT                 *JWTConf       `yaml:"jwt"`
 	Oss                 *OssConf       `yaml:"oss"`
 	//Prometheus          *PrometheusConf `yaml:"prometheus"`
-	BasicAuth *BasicAuthConf `yaml:"basicAuth"`
-	Tiered    *TieredConf    `yaml:"tiered"`
+	BasicAuth     *BasicAuthConf     `yaml:"basicAuth"`
+	ClientMetrics *ClientMetricsConf `yaml:"clientMetrics"`
+	Tiered        *TieredConf        `yaml:"tiered"`
 }
 type HttpConf struct {
 	Addr string `yaml:"addr"`
@@ -72,6 +73,13 @@ type OssConf struct {
 type BasicAuthConf struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+}
+
+type ClientMetricsConf struct {
+	ClientKey      string `yaml:"clientKey"`
+	MaxBatchSize   int    `yaml:"maxBatchSize"`
+	MaxBodyBytes   int64  `yaml:"maxBodyBytes"`
+	MaxAppVersions int    `yaml:"maxAppVersions"`
 }
 
 type TieredConf struct {

@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 
 	b_errorx "github.com/asynccnu/ccnubox-be/bff/pkg/errorx"
@@ -22,6 +23,28 @@ func TestFindCustomErrorTraversesEntireChain(t *testing.T) {
 	}
 	if got != expected {
 		t.Fatalf("got CustomError %p, want %p", got, expected)
+	}
+}
+
+func TestRedactedHeadersDoesNotLeakCredentials(t *testing.T) {
+	headers := http.Header{
+		"Authorization":       []string{"Bearer secret-token"},
+		"Cookie":              []string{"session=secret"},
+		"Proxy-Authorization": []string{"Basic secret"},
+		"X-Request-Id":        []string{"request-1"},
+	}
+
+	got := redactedHeaders(headers)
+	for _, name := range []string{"Authorization", "Cookie", "Proxy-Authorization"} {
+		if value := got.Get(name); value != "[REDACTED]" {
+			t.Fatalf("%s got %q, want redacted", name, value)
+		}
+	}
+	if got.Get("X-Request-Id") != "request-1" {
+		t.Fatal("non-sensitive header was unexpectedly changed")
+	}
+	if headers.Get("Authorization") != "Bearer secret-token" {
+		t.Fatal("source headers were mutated")
 	}
 }
 

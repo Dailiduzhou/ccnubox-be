@@ -53,7 +53,7 @@ func (lm *LoggerMiddleware) handleResponse(ctx *gin.Context) (web.Response, int)
 				logger.String("ip", ctx.ClientIP()),
 				logger.String("path", ctx.Request.URL.Path),
 				logger.String("method", ctx.Request.Method),
-				logger.String("headers", fmt.Sprintf("%v", ctx.Request.Header)),
+				logger.String("headers", fmt.Sprintf("%v", redactedHeaders(ctx.Request.Header))),
 			)
 			return web.Response{Code: errs.ERROR_TYPE_ERROR_CODE, Msg: err.Error(), Data: nil}, http.StatusInternalServerError
 
@@ -64,7 +64,7 @@ func (lm *LoggerMiddleware) handleResponse(ctx *gin.Context) (web.Response, int)
 			logger.String("ip", ctx.ClientIP()),
 			logger.String("path", ctx.Request.URL.Path),
 			logger.String("method", ctx.Request.Method),
-			logger.String("headers", fmt.Sprintf("%v", ctx.Request.Header)),
+			logger.String("headers", fmt.Sprintf("%v", redactedHeaders(ctx.Request.Header))),
 			logger.Int("httpCode", bizErr.HttpCode),
 			logger.Int("code", bizErr.Code),
 			logger.String("msg", bizErr.Message),
@@ -77,7 +77,7 @@ func (lm *LoggerMiddleware) handleResponse(ctx *gin.Context) (web.Response, int)
 		logger.String("ip", ctx.ClientIP()),
 		logger.String("path", ctx.Request.URL.Path),
 		logger.String("method", ctx.Request.Method),
-		logger.String("headers", fmt.Sprintf("%v", ctx.Request.Header)),
+		logger.String("headers", fmt.Sprintf("%v", redactedHeaders(ctx.Request.Header))),
 	)
 	res = ginx.GetResp[web.Response](ctx)
 
@@ -87,6 +87,16 @@ func (lm *LoggerMiddleware) handleResponse(ctx *gin.Context) (web.Response, int)
 	}
 
 	return res, httpCode
+}
+
+func redactedHeaders(headers http.Header) http.Header {
+	result := headers.Clone()
+	for _, name := range []string{"Authorization", "Cookie", "Proxy-Authorization", "X-Client-Key"} {
+		if _, exists := result[http.CanonicalHeaderKey(name)]; exists {
+			result.Set(name, "[REDACTED]")
+		}
+	}
+	return result
 }
 
 // findCustomError traverses the complete error chain. Business errors may be

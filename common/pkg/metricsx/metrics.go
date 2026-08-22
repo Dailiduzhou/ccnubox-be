@@ -12,6 +12,7 @@ type Metrics struct {
 	Redis     *RedisMetrics
 	MQMetrics *MQMetrics
 	User      *UserMetrics
+	Client    *ClientMetrics
 }
 
 // New 创建并初始化所有监控指标，自动注册到 Prometheus 默认 registerer。
@@ -28,6 +29,7 @@ func NewWithRegisterer(reg prometheus.Registerer, namespace string) *Metrics {
 		Redis:     newRedisMetrics(namespace),
 		MQMetrics: newMQMetrics(namespace),
 		User:      newUserMetrics(namespace),
+		Client:    newClientMetrics(namespace),
 	}
 
 	m.HTTP.RequestsTotal = registerVec(reg, m.HTTP.RequestsTotal)
@@ -40,6 +42,11 @@ func NewWithRegisterer(reg prometheus.Registerer, namespace string) *Metrics {
 	m.MQMetrics.ConsumedTotal = registerVec(reg, m.MQMetrics.ConsumedTotal)
 	m.MQMetrics.FailedTotal = registerVec(reg, m.MQMetrics.FailedTotal)
 	m.User.ActiveUsers24h = registerVec(reg, m.User.ActiveUsers24h)
+	m.Client.AppErrorsTotal = registerVec(reg, m.Client.AppErrorsTotal)
+	m.Client.APIFailuresTotal = registerVec(reg, m.Client.APIFailuresTotal)
+	m.Client.StartupDuration = registerVec(reg, m.Client.StartupDuration)
+	m.Client.IngestedEventsTotal = registerVec(reg, m.Client.IngestedEventsTotal)
+	m.Client.RejectedBatches = registerVec(reg, m.Client.RejectedBatches)
 
 	return m
 }
