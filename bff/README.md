@@ -52,6 +52,43 @@
 
 使用长短 Token 机制，请求头使用 Bearer 方式进行身份验证。
 
+## 移动端指标 Collector
+
+`POST /api/v1/metrics/client` 接收移动端批量指标。该路由不依赖用户登录态，使用独立的 App Client Key：
+
+```http
+Authorization: Bearer <clientMetrics.clientKey>
+Content-Type: application/json
+```
+
+```json
+{
+  "events": [
+    {
+      "name": "app_error",
+      "timestamp": 1740000000000,
+      "labels": {
+        "platform": "ios",
+        "app_version": "1.0.0",
+        "module": "course",
+        "level": "error"
+      },
+      "value": 1
+    }
+  ]
+}
+```
+
+Collector 仅接受以下固定映射；任何额外 Label 都会导致整批请求被拒绝，避免产生高基数序列：
+
+| 事件名 | Prometheus 指标 | 必需 Label |
+| :--- | :--- | :--- |
+| `app_error` | `ccnubox_app_error_total` | `platform`, `app_version`, `module`, `level` |
+| `app_api_failure` | `ccnubox_app_api_failure_total` | `platform`, `api_group`, `status_code` |
+| `app_startup_duration` | `ccnubox_app_startup_duration_seconds` | `platform`, `app_version` |
+
+默认单批最多 100 条、请求体最多 64 KiB、单进程最多接受 32 个不同的 `app_version`。可通过 `clientMetrics` 配置调整。`clientKey` 为空时 Collector 会返回 503。由于客户端内置 Key 只能作为粗粒度防刷措施，公网入口仍应在网关层配置限流。
+
 ## 系统架构
 
 // TODO

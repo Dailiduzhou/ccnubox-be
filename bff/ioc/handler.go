@@ -28,7 +28,6 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/pkg/metricsx"
 	"github.com/ecodeclub/ekit/slice"
 	"github.com/qiniu/api.v7/v7/auth/qbox"
-	"github.com/redis/go-redis/v9"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
@@ -104,8 +103,17 @@ func InitTubeHandler(cfg *conf.ServerConf, tb *TubePolicies, mac *qbox.Mac) *tub
 	return tube.NewTubeHandler(tb.defaultPolicy, tb.officialSite, mac, cfg.Oss.DomainName)
 }
 
-func InitMetricsHandler(l logger.Logger, redisClient redis.Cmdable, metricsx *metricsx.Metrics) *metrics.MetricsHandler {
-	return metrics.NewMetricsHandler(l, redisClient, metricsx)
+func InitMetricsHandler(cfg *conf.ServerConf, l logger.Logger, metricsx *metricsx.Metrics) *metrics.MetricsHandler {
+	options := metrics.ClientOptions{}
+	if cfg.ClientMetrics != nil {
+		options = metrics.ClientOptions{
+			ClientKey:      cfg.ClientMetrics.ClientKey,
+			MaxBatchSize:   cfg.ClientMetrics.MaxBatchSize,
+			MaxBodyBytes:   cfg.ClientMetrics.MaxBodyBytes,
+			MaxAppVersions: cfg.ClientMetrics.MaxAppVersions,
+		}
+	}
+	return metrics.NewMetricsHandler(l, metricsx, options)
 }
 
 func InitSwagHandler() *swag.SwagHandler {
