@@ -58,7 +58,9 @@ func InitApp() (*App, func(), error) {
 		return nil, nil, err
 	}
 	classUsecase := usecase.NewClassUsecase(serverConf, classRepo, refreshLogRepo, jxbRepo, ccnuService, crawler3, delayQueue, logger)
-	classListService := service.NewClasserService(classUsecase, serverConf, logger)
+	contentServiceClient := ioc.InitContentSvcClient(clientv3Client, infraConf)
+	contentClient := service.NewContentClient(contentServiceClient)
+	classListService := service.NewClasserService(classUsecase, serverConf, contentClient, logger)
 	classlistServiceServer := grpc.NewCalendarServiceServer(classListService)
 	server := ioc.InitGRPCxKratosServer(classlistServiceServer, clientv3Client, logger, infraConf)
 	metricsxServer := ioc.InitMetricsServer(infraConf)

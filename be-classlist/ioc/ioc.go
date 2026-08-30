@@ -11,6 +11,7 @@ var ProviderSet = wire.NewSet(
 	InitGRPCxKratosServer,
 	InitOTel,
 	InitUserSvcClient,
+	InitContentSvcClient,
 	InitProxyClient,
 	InitHttpProxyClient,
 	InitKafka,
