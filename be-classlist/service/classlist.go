@@ -43,15 +43,18 @@ func (s *ClassListService) GetClass(ctx context.Context, stuID, year, semester s
 		logger.String("semester", semester),
 	)
 
-	// 默认值填充
-	defaultYear, defaultSemester := ctool.GetCurrentAcademicYearAndSemesterStr(time.Now())
-	if year == "" {
-		year = defaultYear
-		hlog.Warnf("year 参数为空，使用默认值 %s", year)
-	}
-	if semester == "" {
-		semester = defaultSemester
-		hlog.Warnf("semester 参数为空，使用默认值 %s", semester)
+	// 默认值填充:优先以 be-content 的当前学期为准(与 AddClass 保持一致),
+	// content 不可用时降级为本地月份推算,保证读路径可用
+	if year == "" || semester == "" {
+		curYear, curSem := s.getCurrentSemesterWithFallback(ctx, hlog)
+		if year == "" {
+			year = curYear
+			hlog.Warnf("year 参数为空，使用默认值 %s", year)
+		}
+		if semester == "" {
+			semester = curSem
+			hlog.Warnf("semester 参数为空，使用默认值 %s", semester)
+		}
 	}
 
 	// 参数校验
@@ -310,6 +313,18 @@ func (s *ClassListService) GetSchoolDay(ctx context.Context) (holidayTime, schoo
 	}
 
 	return holidayTime, schoolTime, nil
+}
+
+// getCurrentSemesterWithFallback 获取当前学年学期
+// 优先以 be-content 的 getSemester 为准(跟随管理员配置的校历,而非服务器月份),
+// content 不可用时降级为本地月份推算,保证读路径(课表查询)可用
+func (s *ClassListService) getCurrentSemesterWithFallback(ctx context.Context, hlog logger.Logger) (string, string) {
+	curYear, curSem, err := s.content.GetCurrentSemester(ctx)
+	if err != nil {
+		hlog.Warn("get current semester from content service failed, fallback to local estimation", logger.Error(err))
+		return ctool.GetCurrentAcademicYearAndSemesterStr(time.Now())
+	}
+	return curYear, curSem
 }
 
 // checkCurrentSemester 校验目标学年学期是否为当前学期

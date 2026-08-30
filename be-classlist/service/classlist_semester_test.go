@@ -47,6 +47,44 @@ func TestIsCurrentSemester(t *testing.T) {
 	}
 }
 
+func TestGetCurrentSemesterWithFallback(t *testing.T) {
+	tests := []struct {
+		name         string
+		content      *fakeContentClient
+		wantYear     string
+		wantSem      string
+		wantFallback bool
+	}{
+		{name: "content 可用返回其学期", content: &fakeContentClient{year: "2026", semester: "1"}, wantYear: "2026", wantSem: "1"},
+		{name: "content 报错降级本地推算", content: &fakeContentClient{err: errors.New("content down")}, wantFallback: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewClasserService(nil, nil, tt.content, testLogger())
+			gotY, gotS := s.getCurrentSemesterWithFallback(context.Background(), testLogger())
+			if tt.wantFallback {
+				if !isValidSemesterFormat(gotY, gotS) {
+					t.Errorf("降级结果应仍为合法学年学期, got (%s,%s)", gotY, gotS)
+				}
+			} else if gotY != tt.wantYear || gotS != tt.wantSem {
+				t.Errorf("getCurrentSemesterWithFallback() = (%s,%s), want (%s,%s)", gotY, gotS, tt.wantYear, tt.wantSem)
+			}
+		})
+	}
+}
+
+func isValidSemesterFormat(year, semester string) bool {
+	if len(year) != 4 {
+		return false
+	}
+	for _, c := range year {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return semester == "1" || semester == "2" || semester == "3"
+}
+
 func TestCheckCurrentSemester(t *testing.T) {
 	t.Run("当前学期通过", func(t *testing.T) {
 		s := NewClasserService(nil, nil, &fakeContentClient{year: "2026", semester: "1"}, testLogger())
