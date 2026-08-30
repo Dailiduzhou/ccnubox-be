@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
@@ -16,16 +18,18 @@ import (
 )
 
 type ClassListService struct {
-	clu  *usecase.ClassUsecase
-	conf *conf.ServerConf
-	log  logger.Logger
+	clu     *usecase.ClassUsecase
+	conf    *conf.ServerConf
+	content ContentClient
+	log     logger.Logger
 }
 
-func NewClasserService(clu *usecase.ClassUsecase, conf *conf.ServerConf, l logger.Logger) *ClassListService {
+func NewClasserService(clu *usecase.ClassUsecase, conf *conf.ServerConf, content ContentClient, l logger.Logger) *ClassListService {
 	return &ClassListService{
-		clu:  clu,
-		conf: conf,
-		log:  l,
+		clu:     clu,
+		conf:    conf,
+		content: content,
+		log:     l,
 	}
 }
 
@@ -75,8 +79,22 @@ func (s *ClassListService) AddClass(ctx context.Context, stuID, name, durClass, 
 		logger.String("semester", semester),
 	)
 
-	if !tool.CheckSY(semester, year) || weeks <= 0 || !tool.CheckIfThisYear(year, semester) {
+	if !tool.CheckSY(semester, year) || weeks <= 0 {
 		logh.Warn("add class param invalid",
+			logger.Int64("weeks", weeks),
+			logger.Int64("day", day),
+		)
+		return "", "", ParamError(errorx.New("invalid add class param"))
+	}
+
+	// 仅允许添加当前学期的课程,当前学期以 be-content 的 getSemester 为准
+	ok, err := s.checkCurrentSemester(ctx, year, semester)
+	if err != nil {
+		logh.Warn("get current semester from content service failed", logger.Error(err))
+		return "", "", ClassUpdateError(err)
+	}
+	if !ok {
+		logh.Warn("add class param invalid, target semester is not current",
 			logger.Int64("weeks", weeks),
 			logger.Int64("day", day),
 		)
@@ -292,4 +310,26 @@ func (s *ClassListService) GetSchoolDay(ctx context.Context) (holidayTime, schoo
 	}
 
 	return holidayTime, schoolTime, nil
+}
+
+// checkCurrentSemester 校验目标学年学期是否为当前学期
+// 当前学期以 be-content 的 getSemester 为准(跟随管理员配置的校历,而非服务器月份)
+func (s *ClassListService) checkCurrentSemester(ctx context.Context, year, semester string) (bool, error) {
+	curYear, curSemester, err := s.content.GetCurrentSemester(ctx)
+	if err != nil {
+		return false, fmt.Errorf("get current semester from content service failed: %w", err)
+	}
+	return isCurrentSemester(curYear, curSemester, year, semester), nil
+}
+
+// isCurrentSemester 判断目标学年学期是否为当前学期
+func isCurrentSemester(curYear, curSemester, year, semester string) bool {
+	y, errY := strconv.Atoi(year)
+	s, errS := strconv.Atoi(semester)
+	cy, errCY := strconv.Atoi(curYear)
+	cs, errCS := strconv.Atoi(curSemester)
+	if errY != nil || errS != nil || errCY != nil || errCS != nil {
+		return false
+	}
+	return y == cy && s == cs
 }
