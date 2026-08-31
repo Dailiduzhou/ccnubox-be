@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +51,12 @@ type notificationPayload struct {
 type userTaskKey struct {
 	studentID string
 	taskType  string
+}
+
+type awayObservation struct {
+	isAway         bool
+	elapsedMinutes int
+	elapsedKnown   bool
 }
 
 type userTaskState struct {
@@ -580,12 +588,12 @@ func (s *ReminderService) applyActiveObservation(ctx context.Context, sub dao.Li
 	} else if err != nil {
 		return err
 	}
-	isAway := current.AwayTimeM > 0 || current.AwayRange != ""
+	away := currentAwayObservation(*current, now)
 	episode, err := s.dao.LatestAwayEpisode(ctx, sub.StudentID, current.ID)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	if !isAway {
+	if !away.isAway {
 		if err == nil && episode.State == dao.AwayStateAway {
 			episode.State = dao.AwayStateReturned
 			if err := s.dao.SaveAwayEpisode(ctx, episode); err != nil {
@@ -600,7 +608,7 @@ func (s *ReminderService) applyActiveObservation(ctx context.Context, sub dao.Li
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		episode = nil
 	}
-	episode = nextAwayEpisode(episode, sub.StudentID, current.ID, current.AwayTimeM, now)
+	episode = nextAwayEpisode(episode, sub.StudentID, current.ID, away.elapsedMinutes, now)
 	version := episode.EpisodeVersion
 	if err := s.dao.SaveAwayEpisode(ctx, episode); err != nil {
 		return err
@@ -635,6 +643,58 @@ func nextAwayEpisode(existing *dao.AwayEpisode, studentID, reservationID string,
 		LastAwayMinutes:       awayMinutes,
 		State:                 dao.AwayStateAway,
 	}
+}
+
+func currentAwayObservation(row crawler.ReminderReservation, observedAt time.Time) awayObservation {
+	if row.AwayTimeM > 0 {
+		return awayObservation{isAway: true, elapsedMinutes: row.AwayTimeM, elapsedKnown: true}
+	}
+	if strings.TrimSpace(row.AwayRange) == "" {
+		return awayObservation{}
+	}
+	minutes, ok := awayMinutesFromRange(row.AwayRange, row.MakeDateStr, observedAt)
+	if ok {
+		return awayObservation{isAway: true, elapsedMinutes: minutes, elapsedKnown: true}
+	}
+	return awayObservation{isAway: true}
+}
+
+var awayRangeClockRE = regexp.MustCompile(`(\d{1,2}):(\d{2})`)
+
+func awayMinutesFromRange(awayRange, makeDate string, observedAt time.Time) (int, bool) {
+	match := awayRangeClockRE.FindStringSubmatch(awayRange)
+	if match == nil {
+		return 0, false
+	}
+	hour, err := strconv.Atoi(match[1])
+	if err != nil || hour < 0 || hour > 23 {
+		return 0, false
+	}
+	minute, err := strconv.Atoi(match[2])
+	if err != nil || minute < 0 || minute > 59 {
+		return 0, false
+	}
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = observedAt.Location()
+	}
+	observed := observedAt.In(loc)
+	day := time.Date(observed.Year(), observed.Month(), observed.Day(), 0, 0, 0, 0, loc)
+	if strings.TrimSpace(makeDate) != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", makeDate, loc)
+		if err != nil {
+			return 0, false
+		}
+		day = parsed
+	}
+	startedAt := day.Add(time.Duration(hour)*time.Hour + time.Duration(minute)*time.Minute)
+	if startedAt.After(observed) && startedAt.Sub(observed) > 12*time.Hour {
+		startedAt = startedAt.Add(-24 * time.Hour)
+	}
+	if startedAt.After(observed) {
+		return 0, false
+	}
+	return int(observed.Sub(startedAt) / time.Minute), true
 }
 
 func (s *ReminderService) DispatchJobs(ctx context.Context) (err error) {
@@ -682,11 +742,16 @@ func (s *ReminderService) dispatchJob(ctx context.Context, job dao.NotificationJ
 		if err != nil {
 			return s.retryJob(ctx, job, err)
 		}
-		if current == nil || current.ID != job.ExternalReservationID || (current.AwayTimeM == 0 && current.AwayRange == "") {
+		now := s.now()
+		away := awayObservation{}
+		if current != nil {
+			away = currentAwayObservation(*current, now)
+		}
+		if current == nil || current.ID != job.ExternalReservationID || !away.isAway {
 			return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "away condition no longer holds", nil)
 		}
-		if current.AwayTimeM < threshold {
-			next := s.now().Add(time.Duration(threshold-current.AwayTimeM) * time.Minute)
+		if away.elapsedKnown && away.elapsedMinutes < threshold {
+			next := now.Add(time.Duration(threshold-away.elapsedMinutes) * time.Minute)
 			return s.dao.FinishJob(ctx, job, dao.JobPending, "", &next)
 		}
 	}
