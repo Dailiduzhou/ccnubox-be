@@ -37,7 +37,7 @@ func (h *FeedHandler) RegisterRoutes(s *gin.RouterGroup, authMiddleware gin.Hand
 	sg.POST("/clearFeedEvent", authMiddleware, ginx.WrapClaimsAndReq(h.ClearFeedEvent))
 	sg.POST("/changeFeedAllowList", authMiddleware, ginx.WrapClaimsAndReq(h.ChangeFeedAllowList))
 	sg.GET("/getFeedAllowList", authMiddleware, ginx.WrapClaims(h.GetFeedAllowList))
-	sg.POST("/readFeedEvent", authMiddleware, ginx.WrapReq(h.ReadFeedEvent))
+	sg.POST("/readFeedEvent", authMiddleware, ginx.WrapClaimsAndReq(h.ReadFeedEvent))
 	sg.POST("/saveFeedToken", authMiddleware, ginx.WrapClaimsAndReq(h.SaveFeedToken))
 	sg.POST("/removeFeedToken", authMiddleware, ginx.WrapClaimsAndReq(h.RemoveFeedToken))
 	sg.POST("/publicMuxiOfficialMSG", authMiddleware, ginx.WrapClaimsAndReq(h.PublicMuxiOfficialMSG))
@@ -112,9 +112,10 @@ func (h *FeedHandler) ClearFeedEvent(ctx *gin.Context, req ClearFeedEventReq, uc
 // @Success 200 {object} web.Response "成功"
 // @Failure 500 {object} web.Response "系统异常"
 // @Router /feed/readFeedEvent [post]
-func (h *FeedHandler) ReadFeedEvent(ctx *gin.Context, req ReadFeedEventReq) (web.Response, error) {
+func (h *FeedHandler) ReadFeedEvent(ctx *gin.Context, req ReadFeedEventReq, uc ijwt.UserClaims) (web.Response, error) {
 	_, err := h.feedClient.ReadFeedEvent(ctx, &feedv1.ReadFeedEventReq{
-		FeedId: req.FeedId,
+		FeedId:    req.FeedId,
+		StudentId: uc.StudentId,
 	})
 	if err != nil {
 		return web.Response{}, errs.READ_FEED_EVENT_ERROR(err)
@@ -144,6 +145,7 @@ func (h *FeedHandler) ChangeFeedAllowList(ctx *gin.Context, req ChangeFeedAllowL
 			Holiday:   *req.Holiday,
 			Energy:    *req.Energy,
 			FeedBack:  *req.FeedBack,
+			Library:   req.Library,
 		},
 	})
 	if err != nil {
@@ -177,6 +179,7 @@ func (h *FeedHandler) GetFeedAllowList(ctx *gin.Context, uc ijwt.UserClaims) (we
 			Holiday:  allowlist.AllowList.Holiday,
 			Energy:   allowlist.AllowList.Energy,
 			FeedBack: allowlist.AllowList.FeedBack,
+			Library:  allowlist.AllowList.GetLibrary(),
 		},
 	}, nil
 }
