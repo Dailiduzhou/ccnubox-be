@@ -135,14 +135,19 @@ func (dao *feedUserConfigDAO) ChangeConfigBits(
 		}
 
 		if libraryChanged {
+			revision, err := allocateLibraryPreferenceRevision(tx)
+			if err != nil {
+				return err
+			}
 			change := model.FeedUserConfigChange{
+				Revision:       revision,
 				StudentId:      studentID,
 				LibraryEnabled: *library,
 			}
 			if err := tx.Create(&change).Error; err != nil {
 				return err
 			}
-			config.LibraryRevision = change.Revision
+			config.LibraryRevision = revision
 		}
 		return tx.Save(&config).Error
 	})
@@ -150,6 +155,19 @@ func (dao *feedUserConfigDAO) ChangeConfigBits(
 		return nil, errorx.Errorf("dao: change feed config transaction failed, sid: %s, err: %w", studentID, err)
 	}
 	return &config, nil
+}
+
+// 分配器行锁会一直持有到事务提交，保证版本号顺序与提交顺序一致。
+func allocateLibraryPreferenceRevision(tx *gorm.DB) (int64, error) {
+	var allocator model.FeedUserConfigRevisionAllocator
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&allocator, model.FeedUserConfigRevisionAllocatorID).Error; err != nil {
+		return 0, err
+	}
+	allocator.Revision++
+	if err := tx.Model(&allocator).UpdateColumn("revision", allocator.Revision).Error; err != nil {
+		return 0, err
+	}
+	return allocator.Revision, nil
 }
 
 func (dao *feedUserConfigDAO) IsLibraryEnabled(ctx context.Context, studentID string) (bool, error) {

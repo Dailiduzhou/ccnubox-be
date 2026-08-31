@@ -80,10 +80,18 @@ type FeedUserConfig struct {
 }
 
 type FeedUserConfigChange struct {
-	Revision       int64  `gorm:"primaryKey;autoIncrement;column:revision;index:idx_feed_config_changes_student_revision,priority:2"`
+	Revision       int64  `gorm:"primaryKey;autoIncrement:false;column:revision;index:idx_feed_config_changes_student_revision,priority:2"`
 	StudentId      string `gorm:"column:student_id;type:varchar(255);not null;index:idx_feed_config_changes_student_revision,priority:1"`
 	LibraryEnabled bool   `gorm:"column:library_enabled;not null"`
 	CreatedAt      int64  `gorm:"column:created_at;not null"`
+}
+
+const FeedUserConfigRevisionAllocatorID int64 = 1
+
+// FeedUserConfigRevisionAllocator 串行分配偏好变更版本号。
+type FeedUserConfigRevisionAllocator struct {
+	ID       int64 `gorm:"primaryKey;autoIncrement:false;column:id"`
+	Revision int64 `gorm:"column:revision;not null;default:0"`
 }
 
 func (c *FeedUserConfigChange) BeforeCreate(_ *gorm.DB) error {
