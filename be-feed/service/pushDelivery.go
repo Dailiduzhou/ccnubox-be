@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,7 +88,8 @@ func (s *pushDeliveryService) DispatchDue(ctx context.Context) error {
 		}
 		if err == nil {
 			domainEvent := convFeedEventsFromModelToDomain([]model.FeedEvent{*event})[0]
-			err = s.push.PushMSG(ctx, &domainEvent)
+			// 使用稳定 CID 让 JPush 对重试做幂等，避免推送成功但 sent 回写前进程退出导致重复推送。
+			err = s.push.PushMSGWithCID(ctx, &domainEvent, pushDeliveryCID(deliveries[i].ID))
 		}
 		if err == nil {
 			err = s.markSent(ctx, deliveries[i].ID)
@@ -126,6 +128,10 @@ func (s *pushDeliveryService) DispatchDue(ctx context.Context) error {
 			logger.Error(err))
 	}
 	return nil
+}
+
+func pushDeliveryCID(id int64) string {
+	return "fd-" + strconv.FormatInt(id, 36)
 }
 
 func (s *pushDeliveryService) markSent(ctx context.Context, id int64) error {

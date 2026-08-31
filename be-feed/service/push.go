@@ -21,6 +21,7 @@ type pushService struct {
 
 type PushService interface {
 	PushMSG(ctx context.Context, pushData *domain.FeedEvent) error
+	PushMSGWithCID(ctx context.Context, pushData *domain.FeedEvent, cid string) error
 	PushMSGS(ctx context.Context, pushDatas []domain.FeedEvent) []ErrWithData
 	PushToAll(ctx context.Context, pushData *domain.FeedEvent) error
 	InsertFailFeedEvents(ctx context.Context, failEvents []domain.FeedEvent) error
@@ -89,6 +90,10 @@ func (s *pushService) InsertFailFeedEvents(ctx context.Context, failEvents []dom
 
 // 推送单条消息
 func (s *pushService) PushMSG(ctx context.Context, pushData *domain.FeedEvent) error {
+	return s.PushMSGWithCID(ctx, pushData, "")
+}
+
+func (s *pushService) PushMSGWithCID(ctx context.Context, pushData *domain.FeedEvent, cid string) error {
 	tokens, err := s.feedTokenDAO.GetTokens(ctx, pushData.StudentId)
 	if err != nil {
 		return errorx.Errorf("service: get tokens failed for push, sid: %s, err: %w", pushData.StudentId, err)
@@ -111,6 +116,7 @@ func (s *pushService) PushMSG(ctx context.Context, pushData *domain.FeedEvent) e
 		Extras:      pushData.ExtendFields,
 		MsgContent:  pushData.Content,
 		Title:       pushData.Title,
+		Cid:         cid,
 	})
 
 	if err != nil {

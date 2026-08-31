@@ -20,6 +20,7 @@ type PushData struct {
 	Extras      map[string]string `json:"extras"`
 	MsgContent  string            `json:"msg_content"`
 	Title       string            `json:"title"`
+	Cid         string            `json:"cid,omitempty"`
 }
 
 type JPushConfig struct {
@@ -96,6 +97,7 @@ func (c *client) Push(ids []string, pushData PushData) error {
 
 	//加载推送
 	payload := jpush.NewPayLoad()
+	payload.Cid = pushData.Cid
 	payload.SetOptions(c.o)
 	payload.SetPlatform(c.pf)
 	payload.SetAudience(&at)
