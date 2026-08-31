@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
+	"github.com/asynccnu/ccnubox-be/be-library/service"
 	"github.com/asynccnu/ccnubox-be/common/pkg/grpcx"
+	"github.com/asynccnu/ccnubox-be/common/pkg/metricsx"
 	"github.com/joho/godotenv"
 )
 
@@ -21,12 +24,16 @@ func main() {
 
 type App struct {
 	server   grpcx.Server
+	metrics  *metricsx.Server
+	reminder *service.ReminderScheduler
 	shutdown func(ctx context.Context) error
 }
 
-func NewApp(server grpcx.Server, shutdown func(ctx context.Context) error) App {
+func NewApp(server grpcx.Server, metrics *metricsx.Server, reminder *service.ReminderScheduler, shutdown func(ctx context.Context) error) App {
 	return App{
 		server:   server,
+		metrics:  metrics,
+		reminder: reminder,
 		shutdown: shutdown,
 	}
 }
@@ -36,8 +43,23 @@ func (app App) Run() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		if err := app.reminder.Stop(ctx); err != nil {
+			panic(fmt.Sprintln("reminder shutdown error:", err))
+		}
+		if err := app.metrics.Close(); err != nil {
+			panic(fmt.Sprintln("metrics shutdown error:", err))
+		}
 		if err := app.shutdown(ctx); err != nil {
 			panic(fmt.Sprintln("shutdown error:", err))
+		}
+	}()
+	if err := app.reminder.Start(); err != nil {
+		panic(fmt.Sprintln("reminder startup error:", err))
+	}
+
+	go func() {
+		if err := app.metrics.Serve(); err != nil {
+			log.Printf("metrics server exit: addr=%s err=%v", app.metrics.Addr(), err)
 		}
 	}()
 

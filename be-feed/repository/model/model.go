@@ -44,8 +44,11 @@ type FeedEvent struct {
 	StudentId    string       `gorm:"column:student_id;type:varchar(255);not null"` // 学生 ID，唯一
 	Title        string       `gorm:"column:title;type:TEXT;not null"`              // 标题
 	Content      string       `gorm:"column:content;type:TEXT"`                     // 内容
-	Url          string       `gorm:"column:url;type:varchar(255)"`                 //消息详情跳转路由
+	Url          string       `gorm:"column:url;type:varchar(255)"`                 // 消息详情跳转路由
 	ExtendFields ExtendFields `gorm:"column:extend_fields;type:TEXT"`               // 拓展字段
+	DedupeKey    *string      `gorm:"column:dedupe_key;type:varchar(255);uniqueIndex:uidx_feed_events_dedupe"`
+	Source       string       `gorm:"column:source;type:varchar(64)"`
+	OccurredAt   int64        `gorm:"column:occurred_at;not null;default:0"`
 }
 
 type FeedFailEvent struct {
@@ -54,7 +57,7 @@ type FeedFailEvent struct {
 	StudentId    string       `gorm:"column:student_id;type:varchar(255);not null"` // 学生 ID
 	Title        string       `gorm:"column:title;type:TEXT;not null"`              // 标题
 	Content      string       `gorm:"column:content;type:TEXT"`                     // 内容
-	Url          string       `gorm:"column:url;type:varchar(255)"`                 //消息详情跳转路由
+	Url          string       `gorm:"column:url;type:varchar(255)"`                 // 消息详情跳转路由
 	ExtendFields ExtendFields `gorm:"column:extend_fields;type:TEXT"`               // 拓展字段
 }
 
@@ -65,13 +68,48 @@ const (
 	HolidayPos
 	MuxiPos
 	FeedBackPos
+	LibraryPos
 )
 
 // FeedUserConfig 表示用户的 Feed 配置
 type FeedUserConfig struct {
-	StudentId  string `gorm:"column:student_id;type:varchar(255);not null;uniqueIndex"`
-	PushConfig uint16 `gorm:"column:push_config;type:SMALLINT UNSIGNED;not null;default:31"` // 16位二进制，默认值 0000 0000 0001 1111 (十进制 31)
+	StudentId       string `gorm:"column:student_id;type:varchar(255);not null;uniqueIndex"`
+	PushConfig      uint16 `gorm:"column:push_config;type:SMALLINT UNSIGNED;not null;default:31"` // 16位二进制，默认值 0000 0000 0001 1111 (十进制 31)
+	LibraryRevision int64  `gorm:"column:library_revision;not null;default:0"`
 	BaseModel
+}
+
+type FeedUserConfigChange struct {
+	Revision       int64  `gorm:"primaryKey;autoIncrement;column:revision;index:idx_feed_config_changes_student_revision,priority:2"`
+	StudentId      string `gorm:"column:student_id;type:varchar(255);not null;index:idx_feed_config_changes_student_revision,priority:1"`
+	LibraryEnabled bool   `gorm:"column:library_enabled;not null"`
+	CreatedAt      int64  `gorm:"column:created_at;not null"`
+}
+
+func (c *FeedUserConfigChange) BeforeCreate(_ *gorm.DB) error {
+	if c.CreatedAt == 0 {
+		c.CreatedAt = time.Now().Unix()
+	}
+	return nil
+}
+
+const (
+	PushDeliveryPending    = "pending"
+	PushDeliverySending    = "sending"
+	PushDeliverySent       = "sent"
+	PushDeliveryFailed     = "failed"
+	PushDeliverySuppressed = "suppressed"
+)
+
+// 可重试的消息投递
+type FeedPushDelivery struct {
+	BaseModel
+	FeedEventID   int64  `gorm:"column:feed_event_id;not null;uniqueIndex"`
+	StudentId     string `gorm:"column:student_id;type:varchar(255);not null;index"`
+	Status        string `gorm:"column:status;type:varchar(16);not null;default:pending;index:idx_feed_push_due,priority:1"`
+	Attempts      int    `gorm:"column:attempts;not null;default:0"`
+	NextAttemptAt int64  `gorm:"column:next_attempt_at;not null;default:0;index:idx_feed_push_due,priority:2"`
+	LastError     string `gorm:"column:last_error;type:text"`
 }
 
 // FeedUserToken 表，存储每个用户的推送 FeedUserToken

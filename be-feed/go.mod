@@ -16,6 +16,7 @@ require (
 	go.etcd.io/etcd/client/v3 v3.6.7
 	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9
 	google.golang.org/grpc v1.77.0
+	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
 )
 
@@ -59,6 +60,7 @@ require (
 	github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af // indirect
 	github.com/json-iterator/go v1.1.6 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
+	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v0.0.0-20180701023420-4b7aa43c6742 // indirect
 	github.com/nacos-group/nacos-sdk-go v1.1.6 // indirect
