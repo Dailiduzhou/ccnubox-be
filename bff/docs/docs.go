@@ -4306,6 +4306,10 @@ const docTemplate = `{
                 "holiday": {
                     "type": "boolean"
                 },
+                "library": {
+                    "description": "Library is optional so requests from already deployed clients preserve the user's existing library-reminder preference.",
+                    "type": "boolean"
+                },
                 "muxi": {
                     "type": "boolean"
                 }
@@ -4370,6 +4374,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "holiday": {
+                    "type": "boolean"
+                },
+                "library": {
                     "type": "boolean"
                 },
                 "muxi": {
