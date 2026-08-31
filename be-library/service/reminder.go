@@ -177,7 +177,7 @@ func (s *ReminderService) syncPreferences(ctx context.Context) error {
 			return err
 		}
 		if len(changes) == 0 {
-			return nil
+			return s.refreshPendingBaselines(ctx)
 		}
 		daoChanges := make([]dao.PreferenceChange, 0, len(changes))
 		lastRevision := cursor
@@ -224,6 +224,20 @@ func (s *ReminderService) rebuildPreferences(ctx context.Context) error {
 		if err := s.forEachSubscription(ctx, enabled, s.RefreshUser); err != nil {
 			s.logger.Warn("library reminder rebuilt baseline batch failed", logger.Error(err))
 		}
+	}
+	return nil
+}
+
+func (s *ReminderService) refreshPendingBaselines(ctx context.Context) error {
+	if !s.config.ShouldBaselineOnEnable() {
+		return nil
+	}
+	pending, err := s.dao.PendingBaselineSubscriptions(ctx, 100000)
+	if err != nil || len(pending) == 0 {
+		return err
+	}
+	if err := s.forEachSubscription(ctx, pending, s.RefreshUser); err != nil {
+		s.logger.Warn("library reminder pending baseline batch failed", logger.Error(err))
 	}
 	return nil
 }

@@ -204,6 +204,12 @@ func (d *ReminderDAO) EnabledSubscriptions(ctx context.Context, limit int) ([]Li
 	return rows, err
 }
 
+func (d *ReminderDAO) PendingBaselineSubscriptions(ctx context.Context, limit int) ([]LibraryReminderSubscription, error) {
+	var rows []LibraryReminderSubscription
+	err := d.db.WithContext(ctx).Where("enabled = ? AND baseline_completed = ?", true, false).Order("id ASC").Limit(limit).Find(&rows).Error
+	return rows, err
+}
+
 func (d *ReminderDAO) ActiveSubscriptions(ctx context.Context, now time.Time, limit int) ([]LibraryReminderSubscription, error) {
 	var rows []LibraryReminderSubscription
 	err := d.db.WithContext(ctx).Model(&LibraryReminderSubscription{}).
