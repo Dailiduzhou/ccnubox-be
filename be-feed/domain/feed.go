@@ -1,5 +1,8 @@
 package domain
 
+// MaxFeedEventURLBytes 与 feed_events.url 的存储上限保持一致。
+const MaxFeedEventURLBytes = 2047
+
 // FeedEvent的模型
 type FeedEvent struct {
 	ID           int64             `json:"id"` // ID

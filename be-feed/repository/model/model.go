@@ -44,7 +44,7 @@ type FeedEvent struct {
 	StudentId    string       `gorm:"column:student_id;type:varchar(255);not null"` // 学生 ID，唯一
 	Title        string       `gorm:"column:title;type:TEXT;not null"`              // 标题
 	Content      string       `gorm:"column:content;type:TEXT"`                     // 内容
-	Url          string       `gorm:"column:url;type:varchar(255)"`                 // 消息详情跳转路由
+	Url          string       `gorm:"column:url;type:varchar(2047)"`                // 消息详情跳转路由
 	ExtendFields ExtendFields `gorm:"column:extend_fields;type:TEXT"`               // 拓展字段
 	DedupeKey    *string      `gorm:"column:dedupe_key;type:varchar(255);uniqueIndex:uidx_feed_events_dedupe"`
 	Source       string       `gorm:"column:source;type:varchar(64)"`
@@ -57,7 +57,7 @@ type FeedFailEvent struct {
 	StudentId    string       `gorm:"column:student_id;type:varchar(255);not null"` // 学生 ID
 	Title        string       `gorm:"column:title;type:TEXT;not null"`              // 标题
 	Content      string       `gorm:"column:content;type:TEXT"`                     // 内容
-	Url          string       `gorm:"column:url;type:varchar(255)"`                 // 消息详情跳转路由
+	Url          string       `gorm:"column:url;type:varchar(2047)"`                // 消息详情跳转路由
 	ExtendFields ExtendFields `gorm:"column:extend_fields;type:TEXT"`               // 拓展字段
 }
 

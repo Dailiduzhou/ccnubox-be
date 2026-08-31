@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,20 @@ func TestValidatePublicFeedEventRequest(t *testing.T) {
 				ExtendFields: map[string]string{"notification_type": "START_30"},
 			}},
 			code: codes.OK,
+		},
+		{
+			name: "url at storage limit",
+			req: &feedv1.PublicFeedEventReq{StudentId: "u", Event: &feedv1.FeedEvent{
+				Type: feedv1.FeedEventType_GRADE, Url: strings.Repeat("a", 2047),
+			}},
+			code: codes.OK,
+		},
+		{
+			name: "url exceeds storage limit",
+			req: &feedv1.PublicFeedEventReq{StudentId: "u", Event: &feedv1.FeedEvent{
+				Type: feedv1.FeedEventType_GRADE, Url: strings.Repeat("a", 2048),
+			}},
+			code: codes.InvalidArgument,
 		},
 	}
 	for _, tt := range tests {

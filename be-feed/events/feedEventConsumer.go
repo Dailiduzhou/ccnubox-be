@@ -122,7 +122,7 @@ func (f *FeedEventConsumerHandler) recordConsumed(status string, count int) {
 	f.m.MQMetrics.ConsumedTotal.WithLabelValues(topic.FeedEvent, status).Add(float64(count))
 }
 
-// feedEventKafkaHandler 按分区顺序处理消息。格式错误的消息无法通过重试恢复，
+// feedEventKafkaHandler 按分区顺序处理消息。格式或字段非法的消息无法通过重试恢复，
 // 因此记录足够的定位信息和指标后确认；数据库错误则有限退避重试，耗尽后不
 // 确认 offset，让 Kafka 在下一次 consumer session 中重新投递。
 type feedEventKafkaHandler struct {
@@ -166,6 +166,13 @@ func (h *feedEventKafkaHandler) consumeMessage(ctx context.Context, message *sar
 		h.consumer.recordFailure("decode_error", 1)
 		h.consumer.recordConsumed("Discarded", 1)
 		logh.Error("feed event message discarded: invalid payload", append(fields, logger.Error(err))...)
+		return true, nil
+	}
+	if len(event.Url) > domain.MaxFeedEventURLBytes {
+		h.consumer.recordFailure("invalid_event", 1)
+		h.consumer.recordConsumed("Discarded", 1)
+		logh.Error("feed event message discarded: url exceeds storage limit",
+			append(fields, logger.Int("url_size", len(event.Url)))...)
 		return true, nil
 	}
 

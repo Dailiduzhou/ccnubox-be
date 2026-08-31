@@ -256,7 +256,7 @@ func validatePublicFeedEventRequest(req *feedv1.PublicFeedEventReq) error {
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported feed event type")
 	}
-	if len(event.GetTitle()) > 1024 || len(event.GetContent()) > 8192 || len(event.GetUrl()) > 2048 {
+	if len(event.GetTitle()) > 1024 || len(event.GetContent()) > 8192 || len(event.GetUrl()) > domain.MaxFeedEventURLBytes {
 		return status.Error(codes.InvalidArgument, "feed event field is too long")
 	}
 	if len(event.GetDedupeKey()) > 255 || len(event.GetSource()) > 64 || len(event.GetExtendFields()) > 32 {
