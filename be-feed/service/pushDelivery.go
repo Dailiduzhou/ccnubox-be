@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"time"
 
@@ -88,8 +87,17 @@ func (s *pushDeliveryService) DispatchDue(ctx context.Context) error {
 		}
 		if err == nil {
 			domainEvent := convFeedEventsFromModelToDomain([]model.FeedEvent{*event})[0]
-			// 使用稳定 CID 让 JPush 对重试做幂等，避免推送成功但 sent 回写前进程退出导致重复推送。
-			err = s.push.PushMSGWithCID(ctx, &domainEvent, pushDeliveryCID(deliveries[i].ID))
+			cid := deliveries[i].CID
+			if cid == "" {
+				cid, err = s.push.GetPushCID()
+				if err == nil {
+					err = s.saveCID(ctx, deliveries[i].ID, cid)
+				}
+			}
+			if err == nil {
+				// 持久化 JPush 签发的 CID，让重试保持幂等。
+				err = s.push.PushMSGWithCID(ctx, &domainEvent, cid)
+			}
 		}
 		if err == nil {
 			err = s.markSent(ctx, deliveries[i].ID)
@@ -130,8 +138,10 @@ func (s *pushDeliveryService) DispatchDue(ctx context.Context) error {
 	return nil
 }
 
-func pushDeliveryCID(id int64) string {
-	return "fd-" + strconv.FormatInt(id, 36)
+func (s *pushDeliveryService) saveCID(ctx context.Context, id int64, cid string) error {
+	stateCtx, cancel := pushDeliveryStateContext(ctx)
+	defer cancel()
+	return s.dao.SaveCID(stateCtx, id, cid)
 }
 
 func (s *pushDeliveryService) markSent(ctx context.Context, id int64) error {

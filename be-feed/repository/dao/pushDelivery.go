@@ -14,6 +14,7 @@ type PushDeliveryDAO interface {
 	ListDue(ctx context.Context, now int64, limit int) ([]model.FeedPushDelivery, error)
 	Claim(ctx context.Context, id int64) (bool, error)
 	GetFeedEvent(ctx context.Context, id int64) (*model.FeedEvent, error)
+	SaveCID(ctx context.Context, id int64, cid string) error
 	MarkSent(ctx context.Context, id int64) error
 	MarkSuppressed(ctx context.Context, id int64) error
 	MarkRetry(ctx context.Context, id int64, attempts int, nextAttemptAt int64, lastError string, failed bool) error
@@ -65,6 +66,19 @@ func (d *pushDeliveryDAO) GetFeedEvent(ctx context.Context, id int64) (*model.Fe
 		return nil, errorx.Errorf("dao: get push feed event failed, id: %d, err: %w", id, err)
 	}
 	return &event, nil
+}
+
+func (d *pushDeliveryDAO) SaveCID(ctx context.Context, id int64, cid string) error {
+	result := d.db.WithContext(ctx).Model(&model.FeedPushDelivery{}).
+		Where("id = ? AND status = ? AND cid = ?", id, model.PushDeliverySending, "").
+		Update("cid", cid)
+	if result.Error != nil {
+		return errorx.Errorf("dao: save push delivery cid failed, id: %d, err: %w", id, result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return errorx.Errorf("dao: push delivery cid cannot be saved, id: %d", id)
+	}
+	return nil
 }
 
 func (d *pushDeliveryDAO) MarkSent(ctx context.Context, id int64) error {

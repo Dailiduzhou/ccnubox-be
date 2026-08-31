@@ -1,6 +1,9 @@
 package jpush
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"github.com/Scorpio69t/jpush-api-golang-client"
 	"github.com/mitchellh/mapstructure"
 )
@@ -12,6 +15,7 @@ type client struct {
 }
 
 type PushClient interface {
+	GetCID() (string, error)
 	Push(ids []string, pushData PushData) error
 }
 
@@ -53,6 +57,23 @@ func NewJPushClient(cfg *JPushConfig) PushClient {
 	jPushClient := jpush.NewJPushClient(cfg.AppKey, cfg.MasterSecret)
 
 	return &client{pf: &pf, o: &o, jPushClient: jPushClient}
+}
+
+func (c *client) GetCID() (string, error) {
+	data, err := c.jPushClient.GetCid(1, "push")
+	if err != nil {
+		return "", err
+	}
+	var response struct {
+		CIDList []string `json:"cidlist"`
+	}
+	if err = json.Unmarshal(data, &response); err != nil {
+		return "", err
+	}
+	if len(response.CIDList) == 0 {
+		return "", fmt.Errorf("jpush: get cid returned empty list")
+	}
+	return response.CIDList[0], nil
 }
 
 func (c *client) Push(ids []string, pushData PushData) error {

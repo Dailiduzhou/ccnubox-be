@@ -106,6 +106,7 @@ type FeedPushDelivery struct {
 	BaseModel
 	FeedEventID   int64  `gorm:"column:feed_event_id;not null;uniqueIndex"`
 	StudentId     string `gorm:"column:student_id;type:varchar(255);not null;index"`
+	CID           string `gorm:"column:cid;type:varchar(255);not null;default:''"`
 	Status        string `gorm:"column:status;type:varchar(16);not null;default:pending;index:idx_feed_push_due,priority:1"`
 	Attempts      int    `gorm:"column:attempts;not null;default:0"`
 	NextAttemptAt int64  `gorm:"column:next_attempt_at;not null;default:0;index:idx_feed_push_due,priority:2"`

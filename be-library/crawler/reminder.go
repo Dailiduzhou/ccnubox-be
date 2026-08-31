@@ -416,7 +416,7 @@ func (c *ReminderHTTPClient) do(req *http.Request) (data json.RawMessage, err er
 	if err := json.Unmarshal(body, &env); err != nil {
 		return nil, &upstreamError{HTTPCode: resp.StatusCode, Cause: err}
 	}
-	if !env.Status || env.Code != http.StatusOK {
+	if !env.Status || (env.Code != 0 && env.Code != http.StatusOK) {
 		return nil, &upstreamError{HTTPCode: resp.StatusCode, Code: env.Code, Message: env.Message}
 	}
 	if env.Data == nil {

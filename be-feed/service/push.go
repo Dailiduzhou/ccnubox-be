@@ -20,6 +20,7 @@ type pushService struct {
 }
 
 type PushService interface {
+	GetPushCID() (string, error)
 	PushMSG(ctx context.Context, pushData *domain.FeedEvent) error
 	PushMSGWithCID(ctx context.Context, pushData *domain.FeedEvent, cid string) error
 	PushMSGS(ctx context.Context, pushDatas []domain.FeedEvent) []ErrWithData
@@ -86,6 +87,14 @@ func (s *pushService) InsertFailFeedEvents(ctx context.Context, failEvents []dom
 		return errorx.Errorf("service: insert fail feed events failed, count: %d, err: %w", len(failEvents), err)
 	}
 	return nil
+}
+
+func (s *pushService) GetPushCID() (string, error) {
+	cid, err := s.pushClient.GetCID()
+	if err != nil {
+		return "", errorx.Errorf("service: get jpush cid failed: %w", err)
+	}
+	return cid, nil
 }
 
 // 推送单条消息
