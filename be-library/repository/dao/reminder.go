@@ -364,7 +364,11 @@ func (d *ReminderDAO) UpsertJob(ctx context.Context, row *NotificationJob) error
 		if err != nil {
 			return err
 		}
-		if current.Status == JobDone {
+		if current.Status == JobDone || current.Status == JobRunning {
+			return nil
+		}
+		// 已执行过的 pending 任务可能由 dispatchJob 重排到未来，不能被扫描任务拉回原始时间。
+		if current.Status == JobPending && (current.Attempts > 0 || !row.RunAt.Before(current.RunAt)) {
 			return nil
 		}
 		if current.Status == JobSuppressed && current.PreferenceVersion == row.PreferenceVersion && current.LastError != "feature disabled" && current.LastError != "notification type disabled" {

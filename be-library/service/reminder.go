@@ -72,14 +72,14 @@ type userTaskGate struct {
 }
 
 // userTaskFinishFunc 用于结束一次已获得执行许可的用户任务。
-// success 为 true 时保留最小执行间隔，为 false 时立即允许重试。
-type userTaskFinishFunc func(success bool)
+// 无论任务成功或失败，都保留最小执行间隔，避免持续失败触发重试风暴。
+type userTaskFinishFunc func(success bool, finishedAt time.Time)
 
 func newUserTaskGate() *userTaskGate {
 	return &userTaskGate{states: make(map[userTaskKey]userTaskState)}
 }
 
-// start 串行化同一用户的同类任务，并在成功后保留最小执行间隔。
+// start 串行化同一用户的同类任务，并在任务结束后保留最小执行间隔。
 // 偏好版本变化时立即使用新状态，旧任务的结束回调不会覆盖它。
 func (g *userTaskGate) start(studentID, taskType string, preferenceVersion int64, now time.Time, interval time.Duration) (userTaskFinishFunc, bool) {
 	key := userTaskKey{studentID: studentID, taskType: taskType}
@@ -97,18 +97,21 @@ func (g *userTaskGate) start(studentID, taskType string, preferenceVersion int64
 	generation := state.generation
 	g.mu.Unlock()
 
-	return func(success bool) {
+	return func(success bool, finishedAt time.Time) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		current, ok := g.states[key]
 		if !ok || current.generation != generation || current.preferenceVersion != preferenceVersion {
 			return
 		}
-		if !success || interval <= 0 {
+		if interval <= 0 {
 			delete(g.states, key)
 			return
 		}
 		current.running = false
+		if !success {
+			current.nextAllowed = finishedAt.Add(interval)
+		}
 		g.states[key] = current
 	}, true
 }
@@ -341,7 +344,7 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 	if !started {
 		return nil
 	}
-	defer func() { finish(err == nil) }()
+	defer func() { finish(err == nil, s.now()) }()
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, "AUTH_ERROR")
@@ -528,7 +531,7 @@ func (s *ReminderService) scanActiveUser(ctx context.Context, sub dao.LibraryRem
 	if !started {
 		return nil
 	}
-	defer func() { finish(err == nil) }()
+	defer func() { finish(err == nil, s.now()) }()
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
 		return err
@@ -795,69 +798,85 @@ func (s *ReminderService) SendOutbox(ctx context.Context) (err error) {
 		return err
 	}
 	for _, row := range rows {
-		if !s.notificationEnabled(row.Type) {
-			if err := s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "notification type disabled", nil); err != nil {
-				return err
-			}
-			continue
-		}
-		if s.config.IsDryRun() {
-			if err := s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "dry_run", nil); err != nil {
-				return err
-			}
-			continue
-		}
-		var payload notificationPayload
-		if err := json.Unmarshal(row.Payload, &payload); err != nil {
-			if finishErr := s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "invalid payload", nil); finishErr != nil {
-				return finishErr
-			}
-			continue
-		}
-		canSend, err := s.dao.CanSendOutbox(ctx, row)
-		if err != nil {
-			return err
-		}
-		if !canSend {
-			continue
-		}
-		event := payloadFeedEvent(row.DedupeKey, payload)
-		callCtx, cancel := s.remoteCallContext(ctx)
-		defer cancel()
-		result, publishErr := s.feed.Publish(callCtx, row.StudentID, event)
-		if publishErr == nil {
-			if result == PublishDuplicate && s.metrics != nil {
-				s.metrics.NotificationDeduplicatedTotal.WithLabelValues(row.Type).Inc()
-			}
-			status := dao.OutboxSent
-			if result == PublishSuppressed {
-				status = dao.OutboxSuppressed
-			}
-			if err := s.dao.FinishOutbox(ctx, row, status, "", nil); err != nil {
-				return err
-			}
-			continue
-		}
-		s.logger.Warn("library reminder outbox publish failed",
-			logger.Int64("outbox_id", row.ID),
-			logger.String("notification_type", row.Type),
-			logger.String("dedupe_key", row.DedupeKey),
-			logger.String("student_id", maskStudentID(row.StudentID)),
-			logger.Int("attempt", row.Attempts),
-			logger.Error(publishErr),
-		)
-		if row.Attempts >= s.config.RetryMaxAttempts {
-			if err := s.dao.FinishOutbox(ctx, row, dao.OutboxFailed, "retry limit reached", nil); err != nil {
-				return err
-			}
-			continue
-		}
-		next := s.now().Add(time.Duration(1<<min(row.Attempts, 8)) * time.Second)
-		if err := s.dao.FinishOutbox(ctx, row, dao.OutboxFailed, "transient publish failure", &next); err != nil {
-			return err
+		if err := s.sendOutboxRow(ctx, row); err != nil {
+			s.logger.Warn("library reminder outbox row failed",
+				logger.Int64("outbox_id", row.ID),
+				logger.String("notification_type", row.Type),
+				logger.String("dedupe_key", row.DedupeKey),
+				logger.String("student_id", maskStudentID(row.StudentID)),
+				logger.Int("attempt", row.Attempts),
+				logger.Error(err),
+			)
+			s.releaseOutboxAfterFailure(ctx, row)
 		}
 	}
 	return nil
+}
+
+func (s *ReminderService) sendOutboxRow(ctx context.Context, row dao.NotificationOutbox) error {
+	if !s.notificationEnabled(row.Type) {
+		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "notification type disabled", nil)
+	}
+	if s.config.IsDryRun() {
+		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "dry_run", nil)
+	}
+	var payload notificationPayload
+	if err := json.Unmarshal(row.Payload, &payload); err != nil {
+		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "invalid payload", nil)
+	}
+	canSend, err := s.dao.CanSendOutbox(ctx, row)
+	if err != nil {
+		return err
+	}
+	if !canSend {
+		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "subscription changed", nil)
+	}
+	event := payloadFeedEvent(row.DedupeKey, payload)
+	callCtx, cancel := s.remoteCallContext(ctx)
+	result, publishErr := s.feed.Publish(callCtx, row.StudentID, event)
+	cancel()
+	if publishErr == nil {
+		if result == PublishDuplicate && s.metrics != nil {
+			s.metrics.NotificationDeduplicatedTotal.WithLabelValues(row.Type).Inc()
+		}
+		status := dao.OutboxSent
+		if result == PublishSuppressed {
+			status = dao.OutboxSuppressed
+		}
+		return s.dao.FinishOutbox(ctx, row, status, "", nil)
+	}
+	s.logger.Warn("library reminder outbox publish failed",
+		logger.Int64("outbox_id", row.ID),
+		logger.String("notification_type", row.Type),
+		logger.String("dedupe_key", row.DedupeKey),
+		logger.String("student_id", maskStudentID(row.StudentID)),
+		logger.Int("attempt", row.Attempts),
+		logger.Error(publishErr),
+	)
+	if row.Attempts >= s.config.RetryMaxAttempts {
+		return s.dao.FinishOutbox(ctx, row, dao.OutboxFailed, "retry limit reached", nil)
+	}
+	next := s.now().Add(time.Duration(1<<min(row.Attempts, 8)) * time.Second)
+	return s.dao.FinishOutbox(ctx, row, dao.OutboxFailed, "transient publish failure", &next)
+}
+
+// 单行处理失败时尽量释放 sending 状态；即使释放也失败，仍继续处理本批其余记录。
+func (s *ReminderService) releaseOutboxAfterFailure(ctx context.Context, row dao.NotificationOutbox) {
+	lastError := "transient processing failure"
+	var next *time.Time
+	if row.Attempts < s.config.RetryMaxAttempts {
+		retryAt := s.now().Add(time.Duration(1<<min(row.Attempts, 8)) * time.Second)
+		next = &retryAt
+	} else {
+		lastError = "retry limit reached"
+	}
+	if err := s.dao.FinishOutbox(ctx, row, dao.OutboxFailed, lastError, next); err != nil {
+		s.logger.Warn("library reminder outbox release failed",
+			logger.Int64("outbox_id", row.ID),
+			logger.String("dedupe_key", row.DedupeKey),
+			logger.Error(err),
+		)
+	}
 }
 
 func (s *ReminderService) observeWorkMetrics(ctx context.Context) {
