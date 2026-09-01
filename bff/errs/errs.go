@@ -44,17 +44,18 @@ var (
 
 // --- Class ---
 var (
-	GET_CLASS_LIST_ERROR          = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_CLASS_LIST_ERROR_CODE, "获取课程列表失败!"))
-	ADD_CLASS_ERROR               = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, ADD_CLASS_ERROR_CODE, "添加课程失败!"))
-	CLASS_SCHEDULE_CONFLICT_ERROR = errorx.FormatErrorFunc(b_errorx.New(http.StatusConflict, CLASS_SCHEDULE_CONFLICT_ERROR_CODE, "课程时间冲突"))
-	CLASS_ALREADY_EXISTS_ERROR    = errorx.FormatErrorFunc(b_errorx.New(http.StatusConflict, CLASS_ALREADY_EXISTS_ERROR_CODE, "课程已存在"))
-	ADD_CLASS_CONFLICT_ERROR      = CLASS_SCHEDULE_CONFLICT_ERROR // Deprecated: use CLASS_SCHEDULE_CONFLICT_ERROR.
-	DELETE_CLASS_ERROR            = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, DELETE_CLASS_ERROR_CODE, "删除课程失败!"))
-	UPDATE_CLASS_ERROR            = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, UPDATE_CLASS_ERROR_CODE, "更新课程失败!"))
-	GET_RECYCLE_CLASS_ERROR       = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_RECYCLE_CLASS_ERROR_CODE, "获取回收站中的课程信息失败!"))
-	RECOVER_CLASS_ERROR           = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, RECOVER_CLASS_ERROR_CODE, "恢复课程失败!"))
-	SEARCH_CLASS_ERROR            = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, SEARCH_CLASS_ERROR_CODE, "搜索课程失败!"))
-	GET_TO_BE_STUDIED_CLASS_ERROR = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_TO_BE_STUDIED_CLASS_ERROR_CODE, "获取待修读课程失败!"))
+	GET_CLASS_LIST_ERROR                       = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_CLASS_LIST_ERROR_CODE, "获取课程列表失败!"))
+	ADD_CLASS_ERROR                            = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, ADD_CLASS_ERROR_CODE, "添加课程失败!"))
+	CLASS_SCHEDULE_CONFLICT_ERROR              = errorx.FormatErrorFunc(b_errorx.New(http.StatusConflict, CLASS_SCHEDULE_CONFLICT_ERROR_CODE, "课程时间冲突"))
+	CLASS_ALREADY_EXISTS_ERROR                 = errorx.FormatErrorFunc(b_errorx.New(http.StatusConflict, CLASS_ALREADY_EXISTS_ERROR_CODE, "课程已存在"))
+	CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR = errorx.FormatErrorFunc(b_errorx.New(http.StatusConflict, CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR_CODE, "请先完成统一身份认证账户信息初始化"))
+	ADD_CLASS_CONFLICT_ERROR                   = CLASS_SCHEDULE_CONFLICT_ERROR // Deprecated: use CLASS_SCHEDULE_CONFLICT_ERROR.
+	DELETE_CLASS_ERROR                         = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, DELETE_CLASS_ERROR_CODE, "删除课程失败!"))
+	UPDATE_CLASS_ERROR                         = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, UPDATE_CLASS_ERROR_CODE, "更新课程失败!"))
+	GET_RECYCLE_CLASS_ERROR                    = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_RECYCLE_CLASS_ERROR_CODE, "获取回收站中的课程信息失败!"))
+	RECOVER_CLASS_ERROR                        = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, RECOVER_CLASS_ERROR_CODE, "恢复课程失败!"))
+	SEARCH_CLASS_ERROR                         = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, SEARCH_CLASS_ERROR_CODE, "搜索课程失败!"))
+	GET_TO_BE_STUDIED_CLASS_ERROR              = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_TO_BE_STUDIED_CLASS_ERROR_CODE, "获取待修读课程失败!"))
 )
 
 // --- ElecPrice ---

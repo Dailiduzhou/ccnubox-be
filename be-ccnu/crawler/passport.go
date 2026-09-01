@@ -28,7 +28,7 @@ func NewPassport(client *http.Client) *Passport {
 
 // 将放入 crawler 层，这里的组装属于行为级组装
 func (c *Passport) LoginPassport(ctx context.Context, stuId string, password string) (bool, error) {
-	var isInCorrectPASSWORD bool
+	var terminalAuthErr error
 
 	params, err := tool.Retry(func() (*accountRequestParams, error) {
 		return c.getParamsFromHtml(ctx)
@@ -39,15 +39,15 @@ func (c *Passport) LoginPassport(ctx context.Context, stuId string, password str
 
 	_, err = tool.Retry(func() (string, error) {
 		err := c.loginCCNUPassport(ctx, stuId, password, params)
-		if errorx.Is(err, INCorrectPASSWORD) {
-			isInCorrectPASSWORD = true
+		if errorx.Is(err, INCorrectPASSWORD) || tool.IsCCNUAccountInitializationRequired(err) {
+			terminalAuthErr = err
 			return "", nil
 		}
 		return "", err
 	})
 
-	if isInCorrectPASSWORD {
-		return false, INCorrectPASSWORD
+	if terminalAuthErr != nil {
+		return false, terminalAuthErr
 	}
 
 	if err != nil {
@@ -155,14 +155,38 @@ func (c *Passport) loginCCNUPassport(
 		return errorx.Errorf("read login response failed: %w", err)
 	}
 
-	if strings.Contains(string(res), "您输入的用户名或密码有误") {
-		return INCorrectPASSWORD
+	if err := classifyPassportLanding(resp, res); err != nil {
+		return err
 	}
 
 	if resp.Header.Get("Set-Cookie") == "" {
 		return errorx.Errorf("login failed: missing Set-Cookie")
 	}
 
+	return nil
+}
+
+func classifyPassportLanding(resp *http.Response, body []byte) error {
+	if resp != nil && resp.Request != nil && resp.Request.URL != nil {
+		if strings.EqualFold(resp.Request.URL.Hostname(), "selfservice.ccnu.edu.cn") &&
+			strings.EqualFold(strings.TrimRight(resp.Request.URL.Path, "/"), "/account/init.jsf") {
+			return errorx.Errorf("passport: account initialization required: %w", tool.ErrCCNUAccountInitializationRequired)
+		}
+	}
+
+	page := string(body)
+	if strings.Contains(page, "统一身份认证账户信息初始化") {
+		return errorx.Errorf("passport: account initialization required: %w", tool.ErrCCNUAccountInitializationRequired)
+	}
+	for _, marker := range []string{
+		"您输入的用户名或密码有误",
+		"用户名或密码错误",
+		"账号或密码错误",
+	} {
+		if strings.Contains(page, marker) {
+			return INCorrectPASSWORD
+		}
+	}
 	return nil
 }
 

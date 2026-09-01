@@ -6,6 +6,7 @@ import (
 
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
 	userv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/user/v1"
+	"github.com/asynccnu/ccnubox-be/common/tool"
 )
 
 type CCNUService struct {
@@ -21,10 +22,17 @@ func (c *CCNUService) GetCookie(ctx context.Context, stuID string) (string, erro
 		StudentId: stuID,
 	})
 	if err != nil {
-		return "", fmt.Errorf("get cookie from user service: %w", err)
+		return "", mapGetCookieError(err)
 	}
 	if resp == nil || resp.Cookie == "" {
 		return "", fmt.Errorf("get cookie from user service: %w", biz.ErrCookieUnavailable)
 	}
 	return resp.Cookie, nil
+}
+
+func mapGetCookieError(err error) error {
+	if tool.IsCCNUAccountInitializationRequired(err) {
+		return fmt.Errorf("%w: %v", biz.ErrCrawlerAuthentication, err)
+	}
+	return fmt.Errorf("get cookie from user service: %w", err)
 }
