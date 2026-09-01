@@ -115,9 +115,18 @@ func (s *userService) Check(ctx context.Context, studentId string, password stri
 	tlog := s.l.WithContext(ctx)
 
 	// 优先尝试从官方教务验证
+	var accountInitializationErr error
 	_, err := tool.Retry(func() (*ccnuv1.LoginCCNUResponse, error) {
-		return s.ccnu.LoginCCNU(ctx, &ccnuv1.LoginCCNURequest{StudentId: studentId, Password: password})
+		resp, loginErr := s.ccnu.LoginCCNU(ctx, &ccnuv1.LoginCCNURequest{StudentId: studentId, Password: password})
+		if tool.IsCCNUAccountInitializationRequired(loginErr) {
+			accountInitializationErr = loginErr
+			return nil, nil
+		}
+		return resp, loginErr
 	})
+	if accountInitializationErr != nil {
+		return false, errorx.Errorf("service: ccnu account initialization required: %w", accountInitializationErr)
+	}
 
 	switch {
 	case err == nil:
