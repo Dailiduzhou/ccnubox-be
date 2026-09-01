@@ -200,7 +200,8 @@ func suppressStudentWorkTx(tx *gorm.DB, studentID string) error {
 
 func (d *ReminderDAO) EnabledSubscriptions(ctx context.Context, limit int) ([]LibraryReminderSubscription, error) {
 	var rows []LibraryReminderSubscription
-	err := d.db.WithContext(ctx).Where("enabled = ?", true).Order("id ASC").Limit(limit).Find(&rows).Error
+	err := d.db.WithContext(ctx).Where("enabled = ?", true).
+		Order("last_full_refresh_at IS NULL DESC, last_full_refresh_at ASC, id ASC").Limit(limit).Find(&rows).Error
 	return rows, err
 }
 
@@ -216,7 +217,8 @@ func (d *ReminderDAO) ActiveSubscriptions(ctx context.Context, now time.Time, li
 		Distinct("library_reminder_subscriptions.*").
 		Joins("JOIN reservation_snapshots r ON r.student_id = library_reminder_subscriptions.student_id").
 		Where("library_reminder_subscriptions.enabled = ? AND r.start_at <= ? AND r.end_at >= ? AND UPPER(r.status) NOT IN ?", true, now, now, []string{"CANCEL", "STOP", "FINISH"}).
-		Order("library_reminder_subscriptions.id ASC").Limit(limit).Find(&rows).Error
+		Order("library_reminder_subscriptions.last_active_scan_at IS NULL DESC, library_reminder_subscriptions.last_active_scan_at ASC, library_reminder_subscriptions.id ASC").
+		Limit(limit).Find(&rows).Error
 	return rows, err
 }
 
