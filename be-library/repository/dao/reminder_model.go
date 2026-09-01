@@ -3,7 +3,10 @@ package dao
 import "time"
 
 const (
-	SubscriptionAuthUnknown = "UNKNOWN"
+	SubscriptionAuthUnknown         = "UNKNOWN"
+	SubscriptionAuthOK              = "OK"
+	SubscriptionAuthError           = "AUTH_ERROR"
+	SubscriptionAuthUpstreamUnknown = "UPSTREAM_UNKNOWN"
 
 	JobPending    = "pending"
 	JobRunning    = "running"
@@ -16,6 +19,9 @@ const (
 	OutboxSent       = "sent"
 	OutboxFailed     = "failed"
 	OutboxSuppressed = "suppressed"
+
+	SuppressedReasonFeatureDisabled          = "feature disabled"
+	SuppressedReasonNotificationTypeDisabled = "notification type disabled"
 
 	AwayStateAway     = "AWAY"
 	AwayStateReturned = "RETURNED"
@@ -90,8 +96,6 @@ type AwayEpisode struct {
 	AwayStartedAt         time.Time
 	LastAwayMinutes       int
 	State                 string `gorm:"type:varchar(16);not null"`
-	Alert60Sent           bool
-	Alert80Sent           bool
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }

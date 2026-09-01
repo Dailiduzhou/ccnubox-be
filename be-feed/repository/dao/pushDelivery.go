@@ -2,12 +2,15 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/asynccnu/ccnubox-be/be-feed/repository/model"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"gorm.io/gorm"
 )
+
+var ErrFeedEventNotFound = errors.New("feed event not found")
 
 type PushDeliveryDAO interface {
 	RecoverSending(ctx context.Context) error
@@ -63,6 +66,9 @@ func (d *pushDeliveryDAO) Claim(ctx context.Context, id int64) (bool, error) {
 func (d *pushDeliveryDAO) GetFeedEvent(ctx context.Context, id int64) (*model.FeedEvent, error) {
 	var event model.FeedEvent
 	if err := d.db.WithContext(ctx).First(&event, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errorx.Errorf("dao: push feed event not found, id: %d, err: %w", id, ErrFeedEventNotFound)
+		}
 		return nil, errorx.Errorf("dao: get push feed event failed, id: %d, err: %w", id, err)
 	}
 	return &event, nil

@@ -132,9 +132,10 @@ func (dao *feedEventDAO) StoreFeedEvents(ctx context.Context, events []model.Fee
 				continue
 			}
 			delivery := model.FeedPushDelivery{
-				FeedEventID: event.ID,
-				StudentId:   event.StudentId,
-				Status:      model.PushDeliveryPending,
+				FeedEventID:   event.ID,
+				StudentId:     event.StudentId,
+				Status:        model.PushDeliveryPending,
+				NextAttemptAt: time.Now().Unix(),
 			}
 			if err := tx.Create(&delivery).Error; err != nil {
 				return err

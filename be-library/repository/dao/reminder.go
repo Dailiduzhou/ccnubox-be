@@ -278,7 +278,7 @@ func (d *ReminderDAO) SubscriptionForUpdate(ctx context.Context, studentID strin
 func (d *ReminderDAO) SuppressAllWork(ctx context.Context) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&NotificationJob{}).Where("status IN ?", []string{JobPending, JobRunning}).Updates(map[string]any{
-			"status": JobSuppressed, "version": gorm.Expr("version + 1"), "last_error": "feature disabled",
+			"status": JobSuppressed, "version": gorm.Expr("version + 1"), "last_error": SuppressedReasonFeatureDisabled,
 		}).Error; err != nil {
 			return err
 		}
@@ -371,7 +371,7 @@ func (d *ReminderDAO) UpsertJob(ctx context.Context, row *NotificationJob) error
 		if current.Status == JobPending && (current.Attempts > 0 || !row.RunAt.Before(current.RunAt)) {
 			return nil
 		}
-		if current.Status == JobSuppressed && current.PreferenceVersion == row.PreferenceVersion && current.LastError != "feature disabled" && current.LastError != "notification type disabled" {
+		if current.Status == JobSuppressed && current.PreferenceVersion == row.PreferenceVersion && current.LastError != SuppressedReasonFeatureDisabled && current.LastError != SuppressedReasonNotificationTypeDisabled {
 			return nil
 		}
 		return tx.Model(&current).Updates(map[string]any{"run_at": row.RunAt, "status": JobPending, "preference_version": row.PreferenceVersion, "episode_version": row.EpisodeVersion, "version": gorm.Expr("version + 1"), "last_error": ""}).Error

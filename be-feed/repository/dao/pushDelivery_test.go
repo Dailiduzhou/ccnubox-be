@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -10,6 +11,30 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestGetPushFeedEventTreatsSoftDeletedEventAsNotFound(t *testing.T) {
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=5000", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err = db.AutoMigrate(&model.FeedEvent{}); err != nil {
+		t.Fatalf("migrate feed event: %v", err)
+	}
+	event := model.FeedEvent{StudentId: "20260001", Type: "library", Title: "提醒"}
+	if err = db.Create(&event).Error; err != nil {
+		t.Fatalf("create feed event: %v", err)
+	}
+	if err = db.Delete(&event).Error; err != nil {
+		t.Fatalf("soft delete feed event: %v", err)
+	}
+
+	repo := NewPushDeliveryDAO(db)
+	_, err = repo.GetFeedEvent(context.Background(), event.ID)
+	if !errors.Is(err, ErrFeedEventNotFound) {
+		t.Fatalf("get soft-deleted feed event err=%v", err)
+	}
+}
 
 func TestPushDeliveryRecoversSendingOnlyAtStartup(t *testing.T) {
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=5000", t.Name())

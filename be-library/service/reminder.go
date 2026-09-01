@@ -22,6 +22,8 @@ import (
 	userv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/user/v1"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/asynccnu/ccnubox-be/common/pkg/metricsx"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 )
 
@@ -33,6 +35,8 @@ const (
 	NotificationAway80                = "AWAY_80"
 	NotificationBreach                = "BREACH"
 	NotificationBlacklisted           = "BLACKLISTED"
+
+	reservationStatusMaxBytes = 32
 )
 
 type notificationPayload struct {
@@ -182,8 +186,8 @@ func (s *ReminderService) syncPreferences(ctx context.Context) error {
 	}
 	for {
 		callCtx, cancel := s.remoteCallContext(ctx)
-		defer cancel()
 		changes, next, err := s.feed.PreferenceChanges(callCtx, cursor, 200)
+		cancel()
 		if err != nil {
 			return err
 		}
@@ -347,7 +351,7 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 	defer func() { finish(err == nil, s.now()) }()
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
-		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, "AUTH_ERROR")
+		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, libraryTokenFailureStatus(err))
 		return err
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
@@ -355,7 +359,7 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 	}
 	today, err := s.crawler.GetTodayReservations(ctx, token)
 	if err != nil {
-		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, "UPSTREAM_UNKNOWN")
+		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
 		return err
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
@@ -367,7 +371,7 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 	}
 	history, err := s.crawler.GetRecentHistory(ctx, token, crawler.HistoryWatermark{ReservationID: watermark})
 	if err != nil {
-		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, "UPSTREAM_UNKNOWN")
+		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
 		return err
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
@@ -375,7 +379,7 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 	}
 	state, err := s.crawler.GetUserState(ctx, token)
 	if err != nil {
-		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, "UPSTREAM_UNKNOWN")
+		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
 		return err
 	}
 	if s.config.NotificationTypes.Breach && state.BreachNum > 0 {
@@ -383,7 +387,7 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 			return err
 		}
 		if _, err := s.crawler.GetBreaches(ctx, token, 0, s.config.HistoryPageSize); err != nil {
-			_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, "UPSTREAM_UNKNOWN")
+			_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
 			return err
 		}
 	}
@@ -414,7 +418,7 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 		if err := txService.reconcileUserState(ctx, *locked, state, now); err != nil {
 			return err
 		}
-		return txDAO.MarkBaseline(ctx, sub.StudentID, now, "OK")
+		return txDAO.MarkBaseline(ctx, sub.StudentID, now, dao.SubscriptionAuthOK)
 	})
 }
 
@@ -430,7 +434,8 @@ func (s *ReminderService) reconcileReservation(ctx context.Context, sub dao.Libr
 			s.metrics.UnknownReservationStatusTotal.Inc()
 		}
 	}
-	snapshot := &dao.ReservationSnapshot{StudentID: sub.StudentID, ExternalReservationID: row.ID, SeatID: row.SeatID, SeatLabel: row.SeatLabel, Location: row.Location, MakeDate: row.MakeDateStr, StartAt: start, EndAt: end, Status: status, RawStatus: row.Status, FirstSeenAt: now, LastSeenAt: now}
+	storedStatus := truncateUTF8(status, reservationStatusMaxBytes)
+	snapshot := &dao.ReservationSnapshot{StudentID: sub.StudentID, ExternalReservationID: row.ID, SeatID: row.SeatID, SeatLabel: row.SeatLabel, Location: row.Location, MakeDate: row.MakeDateStr, StartAt: start, EndAt: end, Status: storedStatus, RawStatus: row.Status, FirstSeenAt: now, LastSeenAt: now}
 	created, err := s.dao.SaveReservation(ctx, snapshot)
 	if err != nil {
 		return err
@@ -616,12 +621,12 @@ func (s *ReminderService) applyActiveObservation(ctx context.Context, sub dao.Li
 	if err := s.dao.SaveAwayEpisode(ctx, episode); err != nil {
 		return err
 	}
-	if s.config.NotificationTypes.Away60 && !episode.Alert60Sent {
+	if s.config.NotificationTypes.Away60 {
 		if err := s.scheduleJob(ctx, sub, NotificationAway60, current.ID, version, episode.AwayStartedAt.Add(60*time.Minute), int64(version)); err != nil {
 			return err
 		}
 	}
-	if s.config.NotificationTypes.Away80 && !episode.Alert80Sent {
+	if s.config.NotificationTypes.Away80 {
 		if err := s.scheduleJob(ctx, sub, NotificationAway80, current.ID, version, episode.AwayStartedAt.Add(80*time.Minute), int64(version)); err != nil {
 			return err
 		}
@@ -719,7 +724,7 @@ func (s *ReminderService) DispatchJobs(ctx context.Context) (err error) {
 
 func (s *ReminderService) dispatchJob(ctx context.Context, job dao.NotificationJob) error {
 	if !s.notificationEnabled(job.Type) {
-		return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "notification type disabled", nil)
+		return s.dao.FinishJob(ctx, job, dao.JobSuppressed, dao.SuppressedReasonNotificationTypeDisabled, nil)
 	}
 	sub, err := s.dao.Subscription(ctx, job.StudentID)
 	if err != nil {
@@ -756,6 +761,29 @@ func (s *ReminderService) dispatchJob(ctx context.Context, job dao.NotificationJ
 		if away.elapsedKnown && away.elapsedMinutes < threshold {
 			next := now.Add(time.Duration(threshold-away.elapsedMinutes) * time.Minute)
 			return s.dao.FinishJob(ctx, job, dao.JobPending, "", &next)
+		}
+	}
+	if job.Type == NotificationStart30 || job.Type == NotificationEnd10 {
+		token, err := s.libraryToken(ctx, job.StudentID)
+		if err != nil {
+			return s.retryJob(ctx, job, err)
+		}
+		if current, err := s.subscriptionStillCurrent(ctx, *sub); err != nil || !current {
+			return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "subscription changed", nil)
+		}
+		reservations, err := s.crawler.GetTodayReservations(ctx, token)
+		if err != nil {
+			return s.retryJob(ctx, job, err)
+		}
+		active := false
+		for _, reservation := range reservations {
+			if reservation.ID == job.ExternalReservationID {
+				active = !terminalReservationStatus(reservation.Status)
+				break
+			}
+		}
+		if !active {
+			return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "reservation no longer active", nil)
 		}
 	}
 	var start, end time.Time
@@ -815,7 +843,7 @@ func (s *ReminderService) SendOutbox(ctx context.Context) (err error) {
 
 func (s *ReminderService) sendOutboxRow(ctx context.Context, row dao.NotificationOutbox) error {
 	if !s.notificationEnabled(row.Type) {
-		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "notification type disabled", nil)
+		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, dao.SuppressedReasonNotificationTypeDisabled, nil)
 	}
 	if s.config.IsDryRun() {
 		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "dry_run", nil)
@@ -974,6 +1002,18 @@ func (s *ReminderService) libraryToken(ctx context.Context, studentID string) (s
 	return resp.GetToken(), nil
 }
 
+func libraryTokenFailureStatus(err error) string {
+	if userv1.IsIncorrectPasswordError(err) || userv1.IsUserNotFoundError(err) {
+		return dao.SubscriptionAuthError
+	}
+	switch status.Code(err) {
+	case codes.Unauthenticated, codes.PermissionDenied, codes.NotFound:
+		return dao.SubscriptionAuthError
+	default:
+		return dao.SubscriptionAuthUpstreamUnknown
+	}
+}
+
 func (s *ReminderService) remoteCallContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if s.config.RequestTimeout <= 0 {
 		return context.WithCancel(parent)
@@ -1073,7 +1113,7 @@ func (s *ReminderService) runUserOperation(ctx context.Context, row dao.LibraryR
 }
 
 func terminalReservationStatus(status string) bool {
-	switch strings.ToUpper(status) {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case "CANCEL", "STOP", "FINISH":
 		return true
 	default:

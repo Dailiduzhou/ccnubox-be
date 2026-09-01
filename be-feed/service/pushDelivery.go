@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 const (
 	pushDeliveryBatchSize    = 50
 	pushDeliveryMaxAttempts  = 10
-	pushDeliveryMaxBackoff   = 30 * time.Minute
+	pushDeliveryMaxBackoff   = time.Second << pushDeliveryMaxAttempts
 	pushDeliveryErrorLimit   = 2048
 	pushDeliveryStateTimeout = 5 * time.Second
 )
@@ -71,6 +72,15 @@ func (s *pushDeliveryService) DispatchDue(ctx context.Context) error {
 			continue
 		}
 		event, err := s.dao.GetFeedEvent(ctx, deliveries[i].FeedEventID)
+		if errors.Is(err, dao.ErrFeedEventNotFound) {
+			err = s.markSuppressed(ctx, deliveries[i].ID)
+			if err == nil {
+				if s.metrics != nil {
+					s.metrics.PushDeliveryTotal.WithLabelValues("suppressed_missing_event").Inc()
+				}
+				continue
+			}
+		}
 		if err == nil && strings.EqualFold(event.Type, "library") && s.gate != nil {
 			enabled, gateErr := s.gate.IsLibraryEnabled(ctx, event.StudentId)
 			if gateErr != nil {
@@ -110,7 +120,7 @@ func (s *pushDeliveryService) DispatchDue(ctx context.Context) error {
 		}
 
 		attempts := deliveries[i].Attempts + 1
-		backoff := time.Second << min(attempts, 10)
+		backoff := time.Second << min(attempts, pushDeliveryMaxAttempts)
 		if backoff > pushDeliveryMaxBackoff {
 			backoff = pushDeliveryMaxBackoff
 		}

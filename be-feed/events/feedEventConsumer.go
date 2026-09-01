@@ -19,7 +19,6 @@ import (
 type FeedEventConsumerHandler struct {
 	cg          consumer.Consumer        //消费者
 	l           logger.Logger            // 日志记录器
-	stopChan    chan struct{}            //用于停止的管道,没用上
 	feedService service.FeedEventService // 事件数据的存储库
 	m           *metricsx.Metrics
 	ctx         context.Context
@@ -42,7 +41,6 @@ func NewFeedEventConsumerHandler(
 		cg:          cg,
 		l:           l,
 		feedService: feedService,
-		stopChan:    make(chan struct{}),
 		m:           m,
 		ctx:         ctx,
 		cancel:      cancel,
@@ -60,16 +58,25 @@ func (f *FeedEventConsumerHandler) Start() error {
 			f.l.Info("开始消费")
 			// 开始消费主题为 "feed_event" 的消息，并使用自定义的处理函数
 			er := f.cg.Consume(f.ctx, []string{topic.FeedEvent}, &feedEventKafkaHandler{consumer: f})
+			if f.ctx.Err() != nil {
+				return
+			}
 			if er != nil {
-				if f.ctx.Err() != nil {
-					return
-				}
 				// 如果消费循环中出现错误，记录错误日志
 				f.l.Error("退出了消费循环异常", logger.Error(er))
-				time.Sleep(time.Second)
-				continue
+			} else {
+				f.l.Info("消费者停止消费")
 			}
-			f.l.Info("消费者停止消费")
+
+			// ConsumeClaim 返回错误时 Sarama 可能以 nil 结束本轮 Consume，
+			// 统一退避后再重建 session，避免数据库持续故障时频繁 rejoin。
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-f.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 
 	}()
@@ -88,22 +95,6 @@ func (f *FeedEventConsumerHandler) Stop() {
 		}
 	})
 	f.wg.Wait()
-}
-
-// Consume 是实际处理 Kafka 消息的函数
-// 接收 Kafka 消息和事件数组作为参数,并存储到到临时变量里面去
-func (f *FeedEventConsumerHandler) Consume(events []domain.FeedEvent) error {
-	return f.consume(context.Background(), events)
-}
-
-func (f *FeedEventConsumerHandler) consume(ctx context.Context, events []domain.FeedEvent) error {
-	err := f.feedService.InsertEventList(ctx, events)
-	if err != nil {
-		f.recordFailure("db_error", len(events))
-		return err
-	}
-	f.recordConsumed("OK", len(events))
-	return nil
 }
 
 const maxFeedConsumeAttempts = 4
