@@ -18,6 +18,7 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/pkg/crypto"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -36,11 +37,15 @@ type Library struct {
 	Secret string
 }
 
+const seatHMACRequestTimeout = 5 * time.Second
+
 var seatHMACCache struct {
-	sync.Mutex
+	sync.RWMutex
 	key   string
 	until time.Time
 }
+
+var seatHMACFetchGroup singleflight.Group
 
 type payload struct {
 	LoginType string `json:"loginType"`
@@ -194,11 +199,63 @@ func (c *Library) checkLibrarySeatTokenWithSecret(ctx context.Context, token, se
 }
 
 func (c *Library) getSeatHMACKey(ctx context.Context, token string, force bool) (string, error) {
-	seatHMACCache.Lock()
-	defer seatHMACCache.Unlock()
-	if !force && seatHMACCache.key != "" && time.Now().Before(seatHMACCache.until) {
-		return seatHMACCache.key, nil
+	if !force {
+		if key, ok := cachedSeatHMACKey(); ok {
+			return key, nil
+		}
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	resultCh := seatHMACFetchGroup.DoChan("seat_hmac_key", func() (interface{}, error) {
+		// 等待合并期间缓存可能已由上一轮请求填充，非强制刷新时再次检查。
+		if !force {
+			if key, ok := cachedSeatHMACKey(); ok {
+				return key, nil
+			}
+		}
+
+		// 共享请求不继承任一调用者的取消信号，避免首个调用者取消连累其他等待者。
+		requestCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), seatHMACRequestTimeout)
+		defer cancel()
+		key, err := c.fetchSeatHMACKey(requestCtx, token)
+		if err != nil {
+			return "", err
+		}
+
+		seatHMACCache.Lock()
+		seatHMACCache.key = key
+		seatHMACCache.until = time.Now().Add(10 * time.Minute)
+		seatHMACCache.Unlock()
+		return key, nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-resultCh:
+		if result.Err != nil {
+			return "", result.Err
+		}
+		key, ok := result.Val.(string)
+		if !ok || key == "" {
+			return "", errors.New("library: invalid hmac key result")
+		}
+		return key, nil
+	}
+}
+
+func cachedSeatHMACKey() (string, bool) {
+	seatHMACCache.RLock()
+	defer seatHMACCache.RUnlock()
+	if seatHMACCache.key == "" || !time.Now().Before(seatHMACCache.until) {
+		return "", false
+	}
+	return seatHMACCache.key, true
+}
+
+func (c *Library) fetchSeatHMACKey(ctx context.Context, token string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", PG_URL_SEAT_SYSTEM_CONFIG, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return "", err
@@ -225,13 +282,7 @@ func (c *Library) getSeatHMACKey(ctx context.Context, token string, force bool) 
 	if err := json.Unmarshal(envelope.Data, &data); err != nil || data.HMACKey == "" {
 		return "", errors.New("library: system config did not contain hmacKey")
 	}
-	key, err := decryptSeatHMACKey(data.HMACKey)
-	if err != nil {
-		return "", err
-	}
-	seatHMACCache.key = key
-	seatHMACCache.until = time.Now().Add(10 * time.Minute)
-	return key, nil
+	return decryptSeatHMACKey(data.HMACKey)
 }
 
 func decryptSeatHMACKey(encoded string) (string, error) {
