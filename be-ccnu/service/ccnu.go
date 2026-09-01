@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	CCNUSERVER_ERROR       = errorx.FormatErrorFunc(ccnuv1.ErrorCcnuserverError("ccnu服务器错误"))
-	Invalid_SidOrPwd_ERROR = errorx.FormatErrorFunc(ccnuv1.ErrorInvalidSidOrPwd("账号密码错误"))
-	SYSTEM_ERROR           = errorx.FormatErrorFunc(ccnuv1.ErrorSystemError("系统内部错误"))
+	CCNUSERVER_ERROR                           = errorx.FormatErrorFunc(ccnuv1.ErrorCcnuserverError("ccnu服务器错误"))
+	CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR = errorx.FormatErrorFunc(ccnuv1.ErrorCcnuserverError(tool.CCNUAccountInitializationRequiredMarker))
+	Invalid_SidOrPwd_ERROR                     = errorx.FormatErrorFunc(ccnuv1.ErrorInvalidSidOrPwd("账号密码错误"))
+	SYSTEM_ERROR                               = errorx.FormatErrorFunc(ccnuv1.ErrorSystemError("系统内部错误"))
 )
 
 // 这里的err之所以在GetXKCookie和LoginCCNU两个方法里面不进行包装是因为如果进行封装了会导致error类型无法对应上kratos的error导致无法断言
@@ -97,12 +98,20 @@ func (c *ccnuService) loginUnderGrad(ctx context.Context, studentId string, pass
 	ps := crawler.NewPassport(crawler.NewCrawlerClient(c.p, c.timeout))
 	flag, err := ps.LoginPassport(ctx, studentId, password)
 	if err != nil {
-		if errorx.Is(err, crawler.INCorrectPASSWORD) {
-			return nil, flag, Invalid_SidOrPwd_ERROR(errorx.Errorf("loginUnderGrad passport error: %w", err))
-		}
-		return nil, flag, CCNUSERVER_ERROR(errorx.Errorf("loginUnderGrad internal error: %w", err))
+		return nil, flag, wrapUnderGradLoginError(err)
 	}
 	return ps.Client, flag, nil
+}
+
+func wrapUnderGradLoginError(err error) error {
+	switch {
+	case errorx.Is(err, crawler.INCorrectPASSWORD):
+		return Invalid_SidOrPwd_ERROR(errorx.Errorf("loginUnderGrad passport error: %w", err))
+	case tool.IsCCNUAccountInitializationRequired(err):
+		return CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR(errorx.Errorf("loginUnderGrad account initialization required: %w", err))
+	default:
+		return CCNUSERVER_ERROR(errorx.Errorf("loginUnderGrad internal error: %w", err))
+	}
 }
 
 func (c *ccnuService) getUnderGradCookie(ctx context.Context, stuId, password string, tpe ...string) (string, error) {
