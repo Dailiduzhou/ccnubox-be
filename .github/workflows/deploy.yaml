@@ -68,22 +68,30 @@ jobs:
           )
 
           deploy_all=false
-          if [[ ! "$BEFORE_SHA" =~ ^0+$ ]] && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
-            changed_files="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")"
-          elif git cat-file -e "${GITHUB_SHA}^" 2>/dev/null; then
-            # A force-push can make github.event.before unavailable locally.
-            # Diff the current commit instead of treating every tracked file
-            # as changed and accidentally deploying every service.
-            changed_files="$(git diff --name-only "${GITHUB_SHA}^" "$GITHUB_SHA")"
-          else
-            # The repository's first commit has no parent to compare against.
+          if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            # A branch's first push has no previous revision to compare with.
             changed_files=''
             deploy_all=true
+          else
+            if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              # The previous tip can be unreachable after a force-push. Try to
+              # recover it so the diff still covers the complete pushed range.
+              git fetch --no-tags --depth=1 origin "$BEFORE_SHA" || true
+            fi
+
+            if git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              changed_files="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")"
+            else
+              # Never risk omitting services changed by earlier commits in a
+              # multi-commit force-push when the old tip cannot be recovered.
+              changed_files=''
+              deploy_all=true
+            fi
           fi
 
           while IFS= read -r file; do
             case "$file" in
-              common/*)
+              common/*|.github/workflows/deploy.yaml)
                 deploy_all=true
                 ;;
             esac
