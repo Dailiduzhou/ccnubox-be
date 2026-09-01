@@ -23,9 +23,9 @@ on:
 permissions:
   contents: read
 
-# Only the latest waiting main-branch revision is relevant for deployment. The
-# active revision is never cancelled, and every service selected within it is
-# deployed by the serial matrix below.
+# Only one main-branch deployment may touch the server at a time. Builds for
+# the selected services still run in parallel, then one SSH session deploys
+# all of them together.
 concurrency:
   group: ccnubox-dev-deploy
   cancel-in-progress: false
@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       services: ${{ steps.services.outputs.services }}
+      service_list: ${{ steps.services.outputs.service_list }}
       version: ${{ steps.version.outputs.id }}
     steps:
       - name: Checkout code
@@ -66,16 +67,23 @@ jobs:
             bff
           )
 
-          if [[ "$BEFORE_SHA" =~ ^0+$ ]] || ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
-            changed_files="$(git ls-tree -r --name-only "$GITHUB_SHA")"
-          else
+          deploy_all=false
+          if [[ ! "$BEFORE_SHA" =~ ^0+$ ]] && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
             changed_files="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")"
+          elif git cat-file -e "${GITHUB_SHA}^" 2>/dev/null; then
+            # A force-push can make github.event.before unavailable locally.
+            # Diff the current commit instead of treating every tracked file
+            # as changed and accidentally deploying every service.
+            changed_files="$(git diff --name-only "${GITHUB_SHA}^" "$GITHUB_SHA")"
+          else
+            # The repository's first commit has no parent to compare against.
+            changed_files=''
+            deploy_all=true
           fi
 
-          deploy_all=false
           while IFS= read -r file; do
             case "$file" in
-              common/*|.github/workflows/deploy.yaml)
+              common/*)
                 deploy_all=true
                 ;;
             esac
@@ -93,7 +101,21 @@ jobs:
           else
             services_json="$(printf '%s\n' "${selected_services[@]}" | jq -R . | jq -sc .)"
           fi
-          echo "services=$services_json" >> "$GITHUB_OUTPUT"
+          service_list="${selected_services[*]}"
+          {
+            echo "services=$services_json"
+            echo "service_list=$service_list"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo '### Deployment selection'
+            echo "- Deploy all: $deploy_all"
+            echo "- Services: ${service_list:-none}"
+            echo '- Changed files:'
+            echo '```text'
+            printf '%s\n' "${changed_files:-none}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Get commit id
         id: version
@@ -143,11 +165,6 @@ jobs:
       - changes
       - build
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        service: ${{ fromJSON(needs.changes.outputs.services) }}
     steps:
       - name: Set up SSH key
         env:
@@ -159,14 +176,14 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "$SERVER_ADDR" >> ~/.ssh/known_hosts
 
-      - name: Deploy ${{ matrix.service }}
+      - name: Deploy selected services
         env:
           SERVER_ADDR: ${{ secrets.SERVER_ADDR }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
           REGISTRY_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
           REGISTRY_USER: ${{ secrets.ALIYUN_USERNAME }}
-          SERVICE: ${{ matrix.service }}
+          SERVICES: ${{ needs.changes.outputs.service_list }}
           VERSION: ${{ needs.changes.outputs.version }}
         run: |
           set -euo pipefail
@@ -174,10 +191,11 @@ jobs:
           registry_b64="$(printf '%s' "$REGISTRY" | base64 -w 0)"
           registry_user_b64="$(printf '%s' "$REGISTRY_USER" | base64 -w 0)"
           registry_password_b64="$(printf '%s' "$REGISTRY_PASSWORD" | base64 -w 0)"
+          services_b64="$(printf '%s' "$SERVICES" | base64 -w 0)"
 
           {
-            printf "SERVICE='%s'\n" "$SERVICE"
             printf "VERSION='%s'\n" "$VERSION"
+            printf "SERVICES_B64='%s'\n" "$services_b64"
             printf "REGISTRY_B64='%s'\n" "$registry_b64"
             printf "REGISTRY_USER_B64='%s'\n" "$registry_user_b64"
             printf "REGISTRY_PASSWORD_B64='%s'\n" "$registry_password_b64"
@@ -188,6 +206,24 @@ jobs:
           REGISTRY="$(printf '%s' "$REGISTRY_B64" | base64 -d)"
           REGISTRY_USER="$(printf '%s' "$REGISTRY_USER_B64" | base64 -d)"
           REGISTRY_PASSWORD="$(printf '%s' "$REGISTRY_PASSWORD_B64" | base64 -d)"
+          SERVICES="$(printf '%s' "$SERVICES_B64" | base64 -d)"
+          read -r -a services <<< "$SERVICES"
+
+          if ((${#services[@]} == 0)); then
+            echo 'No services selected; nothing to deploy.'
+            exit 0
+          fi
+
+          for service in "${services[@]}"; do
+            case "$service" in
+              be-ccnu|be-class|be-classlist|be-content|be-counter|be-elecprice|be-feed|be-grade|be-library|be-proxy|be-user|bff)
+                ;;
+              *)
+                echo "Invalid service: $service" >&2
+                exit 1
+                ;;
+            esac
+          done
 
           (
             flock -x 200
@@ -198,15 +234,17 @@ jobs:
               --password-stdin \
               "$REGISTRY"
 
-            KEY="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')"
-            if grep -q "^${KEY}=" .env; then
-              sed -i "s/^${KEY}=.*/${KEY}=${VERSION}/" .env
-            else
-              echo "${KEY}=${VERSION}" >> .env
-            fi
+            for service in "${services[@]}"; do
+              KEY="$(printf '%s' "$service" | tr '[:lower:]-' '[:upper:]_')"
+              if grep -q "^${KEY}=" .env; then
+                sed -i "s/^${KEY}=.*/${KEY}=${VERSION}/" .env
+              else
+                echo "${KEY}=${VERSION}" >> .env
+              fi
+            done
 
-            docker compose pull "$SERVICE"
-            docker compose up -d "$SERVICE"
+            docker compose pull "${services[@]}"
+            docker compose up -d "${services[@]}"
             docker image prune -a -f --filter "until=24h"
           ) 200>/tmp/ccnubox_deploy.lock
           REMOTE_SCRIPT
