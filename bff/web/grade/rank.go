@@ -25,6 +25,7 @@ const (
 // @Produce json
 // @Param data body GetRankByTermReq  true "获取学年和学期的学分绩排名请求参数"
 // @Success 200 {object} web.Response{data=GetRankByTermResp} "成功返回学年和学期的排名信息"
+// @Failure 409 {object} web.Response "统一身份认证账户尚未初始化，code=40603"
 // @Failure 500 {object} web.Response "系统异常，获取失败"
 // @Router /grade/getRankByTerm [get]
 func (h *GradeHandler) GetRankByTerm(ctx *gin.Context, req GetRankByTermReq, uc ijwt.UserClaims) (web.Response, error) {
@@ -47,7 +48,7 @@ func (h *GradeHandler) GetRankByTerm(ctx *gin.Context, req GetRankByTermReq, uc 
 
 	if err != nil {
 		log.Println(err)
-		return web.Response{}, errs.GET_RANK_BY_TERM_ERROR(err)
+		return web.Response{}, mapGradeError(err, errs.GET_RANK_BY_TERM_ERROR)
 	}
 
 	resp := &v1.GetRankByTermResp{

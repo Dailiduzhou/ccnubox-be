@@ -12,6 +12,7 @@ import (
 	counterv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/counter/v1"
 	gradev1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/grade/v1"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
+	"github.com/asynccnu/ccnubox-be/common/tool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -54,6 +55,7 @@ func (h *GradeHandler) RegisterRoutes(s *gin.RouterGroup, authMiddleware gin.Han
 // @Produce json
 // @Param data body GetGradeByTermReq  true "获取学年和学期的成绩请求参数"
 // @Success 200 {object} web.Response{data=GetGradeByTermResp} "成功返回学年和学期的成绩信息"
+// @Failure 409 {object} web.Response "统一身份认证账户尚未初始化，code=40603"
 // @Failure 500 {object} web.Response "系统异常，获取失败"
 // @Router /grade/getGradeByTerm [post]
 func (h *GradeHandler) GetGradeByTerm(ctx *gin.Context, req GetGradeByTermReq, uc ijwt.UserClaims) (web.Response, error) {
@@ -70,7 +72,7 @@ func (h *GradeHandler) GetGradeByTerm(ctx *gin.Context, req GetGradeByTermReq, u
 		Refresh:   req.Refresh,
 	})
 	if err != nil {
-		return web.Response{}, errs.GET_GRADE_BY_TERM_ERROR(err)
+		return web.Response{}, mapGradeError(err, errs.GET_GRADE_BY_TERM_ERROR)
 	}
 
 	var resp GetGradeByTermResp
@@ -162,6 +164,7 @@ func (h *GradeHandler) changeKCXZMCS(kcxzmcs []string) []string {
 // @Accept json
 // @Produce json
 // @Success 200 {object} web.Response{data=GetGradeScoreResp} "成功返回学分"
+// @Failure 409 {object} web.Response "统一身份认证账户尚未初始化，code=40603"
 // @Failure 500 {object} web.Response "系统异常，获取失败"
 // @Router /grade/getGradeScore [get]
 func (h *GradeHandler) GetGradeScore(ctx *gin.Context, uc ijwt.UserClaims) (web.Response, error) {
@@ -170,7 +173,7 @@ func (h *GradeHandler) GetGradeScore(ctx *gin.Context, uc ijwt.UserClaims) (web.
 		StudentId: uc.StudentId,
 	})
 	if err != nil {
-		return web.Response{}, errs.GET_GRADE_SCORE_ERROR(err)
+		return web.Response{}, mapGradeError(err, errs.GET_GRADE_SCORE_ERROR)
 	}
 
 	// 转换为目标结构体
@@ -241,12 +244,13 @@ func convTermsToProto(terms []string) []*gradev1.Terms {
 // @Accept json
 // @Produce json
 // @Success 200 {object} web.Response{data=GetGradeTypeResp} "成功返回课程列表"
+// @Failure 409 {object} web.Response "统一身份认证账户尚未初始化，code=40603"
 // @Failure 500 {object} web.Response "系统异常，获取失败"
 // @Router /grade/getGradeType [get]
 func (h *GradeHandler) GetGradeType(ctx *gin.Context, uc ijwt.UserClaims) (web.Response, error) {
 	list, err := h.GradeClient.GetGradeType(ctx, &gradev1.GetGradeTypeReq{StudentId: uc.StudentId})
 	if err != nil {
-		return web.Response{}, errs.GET_GRADE_TYPE_ERROR(err)
+		return web.Response{}, mapGradeError(err, errs.GET_GRADE_TYPE_ERROR)
 	}
 
 	var resp GetGradeTypeResp
@@ -256,4 +260,11 @@ func (h *GradeHandler) GetGradeType(ctx *gin.Context, uc ijwt.UserClaims) (web.R
 		Msg:  "获取课程类别成功！",
 		Data: resp,
 	}, nil
+}
+
+func mapGradeError(err error, fallback func(error) error) error {
+	if tool.IsCCNUAccountInitializationRequired(err) {
+		return errs.CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR(err)
+	}
+	return fallback(err)
 }

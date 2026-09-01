@@ -8,6 +8,7 @@ import (
 	"github.com/asynccnu/ccnubox-be/bff/web"
 	"github.com/asynccnu/ccnubox-be/bff/web/ijwt"
 	userv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/user/v1"
+	"github.com/asynccnu/ccnubox-be/common/tool"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
@@ -55,6 +56,7 @@ func (h *UserHandler) RegisterRoutes(s *gin.RouterGroup, authMiddleware gin.Hand
 // @Header 200 {string} x-jwt-token "短 token"
 // @Header 200 {string} x-refresh-token "刷新 token"
 // @Failure 401 {object} web.Response "账号或密码错误，code=40005"
+// @Failure 409 {object} web.Response "统一身份认证账户尚未初始化，code=40603"
 // @Failure 500 {object} web.Response "登录失败，code=51201；token 生成失败，code=51401"
 // @Router /users/login_ccnu [post]
 func (h *UserHandler) LoginByCCNU(ctx *gin.Context, req LoginByCCNUReq) (web.Response, error) {
@@ -67,13 +69,8 @@ func (h *UserHandler) LoginByCCNU(ctx *gin.Context, req LoginByCCNUReq) (web.Res
 		StudentId: req.StudentId,
 		Password:  req.Password,
 	})
-	switch {
-	case err == nil:
-	// 直接向下执行
-	case userv1.IsIncorrectPasswordError(err):
-		return web.Response{}, errs.USER_SID_OR_PASSWORD_ERROR(err)
-	default:
-		return web.Response{}, errs.LOGIN_BY_CCNU_ERROR(err)
+	if err != nil {
+		return web.Response{}, mapLoginByCCNUError(err)
 	}
 
 	// 兜底的判断
@@ -97,6 +94,17 @@ func (h *UserHandler) LoginByCCNU(ctx *gin.Context, req LoginByCCNUReq) (web.Res
 	return web.Response{
 		Msg: "Success",
 	}, nil
+}
+
+func mapLoginByCCNUError(err error) error {
+	switch {
+	case tool.IsCCNUAccountInitializationRequired(err):
+		return errs.CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR(err)
+	case userv1.IsIncorrectPasswordError(err):
+		return errs.USER_SID_OR_PASSWORD_ERROR(err)
+	default:
+		return errs.LOGIN_BY_CCNU_ERROR(err)
+	}
 }
 
 // Logout

@@ -11,9 +11,10 @@ const (
 
 // Module-specific client errors
 const (
-	CLASS_SCHEDULE_CONFLICT_ERROR_CODE = 40601 // class
-	CLASS_ALREADY_EXISTS_ERROR_CODE    = 40602 // class
-	AUTH_EXPIRED_ERROR_CODE            = 41401 // auth
+	CLASS_SCHEDULE_CONFLICT_ERROR_CODE              = 40601 // class
+	CLASS_ALREADY_EXISTS_ERROR_CODE                 = 40602 // class
+	CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR_CODE = 40603 // CCNU account
+	AUTH_EXPIRED_ERROR_CODE                         = 41401 // auth
 )
 
 // Common server errors
