@@ -38,24 +38,54 @@ func (t ExtendFields) Value() (driver.Value, error) {
 
 // FeedEvent 表示 Feed 事件
 type FeedEvent struct {
-	BaseModel
-	Read         bool         `gorm:"column:read;type:BOOLEAN;not null"`
-	Type         string       `gorm:"column:type;type:VARCHAR(255);not null"`
-	StudentId    string       `gorm:"column:student_id;type:varchar(255);not null"` // 学生 ID，唯一
-	Title        string       `gorm:"column:title;type:TEXT;not null"`              // 标题
-	Content      string       `gorm:"column:content;type:TEXT"`                     // 内容
-	Url          string       `gorm:"column:url;type:varchar(255)"`                 //消息详情跳转路由
-	ExtendFields ExtendFields `gorm:"column:extend_fields;type:TEXT"`               // 拓展字段
+	ID           int64          `gorm:"primaryKey;autoIncrement;column:id"`
+	CreatedAt    int64          `gorm:"column:created_at;not null;index:idx_stuid_deleted_created,priority:3"`
+	UpdatedAt    int64          `gorm:"column:updated_at;not null"`
+	DeletedAt    gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_stuid_deleted_created,priority:2"`
+	Read         bool           `gorm:"column:read;type:BOOLEAN;not null"`
+	Type         string         `gorm:"column:type;type:VARCHAR(255);not null"`
+	StudentId    string         `gorm:"column:student_id;type:varchar(255);not null;index:idx_stuid_deleted_created,priority:1"` // 学生 ID
+	Title        string         `gorm:"column:title;type:TEXT;not null"`                                                         // 标题
+	Content      string         `gorm:"column:content;type:TEXT"`                                                                // 内容
+	Url          string         `gorm:"column:url;type:varchar(255)"`                                                            //消息详情跳转路由
+	ExtendFields ExtendFields   `gorm:"column:extend_fields;type:TEXT"`                                                          // 拓展字段
 }
 
 type FeedFailEvent struct {
-	BaseModel
-	Type         string       `gorm:"column:type;type:VARCHAR(255);not null"`
-	StudentId    string       `gorm:"column:student_id;type:varchar(255);not null"` // 学生 ID
-	Title        string       `gorm:"column:title;type:TEXT;not null"`              // 标题
-	Content      string       `gorm:"column:content;type:TEXT"`                     // 内容
-	Url          string       `gorm:"column:url;type:varchar(255)"`                 //消息详情跳转路由
-	ExtendFields ExtendFields `gorm:"column:extend_fields;type:TEXT"`               // 拓展字段
+	ID           int64          `gorm:"primaryKey;autoIncrement;column:id"`
+	CreatedAt    int64          `gorm:"column:created_at;not null"`
+	UpdatedAt    int64          `gorm:"column:updated_at;not null"`
+	DeletedAt    gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_fail_stuid_deleted,priority:2"`
+	Type         string         `gorm:"column:type;type:VARCHAR(255);not null"`
+	StudentId    string         `gorm:"column:student_id;type:varchar(255);not null;index:idx_fail_stuid_deleted,priority:1"` // 学生 ID
+	Title        string         `gorm:"column:title;type:TEXT;not null"`                                                      // 标题
+	Content      string         `gorm:"column:content;type:TEXT"`                                                             // 内容
+	Url          string         `gorm:"column:url;type:varchar(255)"`                                                         //消息详情跳转路由
+	ExtendFields ExtendFields   `gorm:"column:extend_fields;type:TEXT"`                                                       // 拓展字段
+}
+
+func (f *FeedEvent) BeforeCreate(tx *gorm.DB) error {
+	now := time.Now().Unix()
+	f.CreatedAt = now
+	f.UpdatedAt = now
+	return nil
+}
+
+func (f *FeedEvent) BeforeUpdate(tx *gorm.DB) error {
+	f.UpdatedAt = time.Now().Unix()
+	return nil
+}
+
+func (f *FeedFailEvent) BeforeCreate(tx *gorm.DB) error {
+	now := time.Now().Unix()
+	f.CreatedAt = now
+	f.UpdatedAt = now
+	return nil
+}
+
+func (f *FeedFailEvent) BeforeUpdate(tx *gorm.DB) error {
+	f.UpdatedAt = time.Now().Unix()
+	return nil
 }
 
 // 定义权限开关的关键位

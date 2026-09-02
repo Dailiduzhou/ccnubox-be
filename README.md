@@ -119,12 +119,12 @@ graph TD
 
 ## 配置说明
 
-每个服务目录下都有配置文件：
+服务运行配置按服务维护，基础设施配置示例由根目录统一维护：
 
 | 文件 | 说明 |
 |------|------|
-| `config-example.yaml` | 运行配置示例 |
-| `config-infra-example.yaml` | 基础组件配置示例 |
+| `<服务>/config/config-example.yaml` | 各服务运行配置示例 |
+| `/config-infra-example.yaml` | 所有服务共用的基础组件配置示例 |
 
 ### 配置示例（config-example.yaml）
 
@@ -167,7 +167,7 @@ log:
 
 1. 在根目录创建服务目录
 2. 编写 Dockerfile（参考现有服务）
-3. 添加 config-example.yaml 和 config-infra-example.yaml
+3. 添加服务自己的 config-example.yaml；基础设施配置沿用根目录 config-infra-example.yaml
 4. 将服务加入 GitHub Actions 的构建与部署矩阵
 5. 在 Nacos 中添加对应的运行时配置
 6. 更新本 README 的服务说明
