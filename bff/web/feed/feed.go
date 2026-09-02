@@ -1,6 +1,8 @@
 package feed
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"time"
@@ -18,6 +20,11 @@ func getFeedbackUrl(recordID string) string {
 	values := url.Values{}
 	values.Add("record_id", fmt.Sprintf(`"%s"`, recordID))
 	return fmt.Sprintf("ccnubox://feedback/detail?%s", values.Encode())
+}
+
+func feedbackDedupeKey(studentID, recordID string) string {
+	sum := sha256.Sum256([]byte(studentID + "\x00" + recordID))
+	return "feedback:" + hex.EncodeToString(sum[:])
 }
 
 type FeedHandler struct {
@@ -348,6 +355,8 @@ func (h *FeedHandler) PublicFeedbackEvent(ctx *gin.Context, req PublicFeedbackEv
 			Content:      req.Content,
 			Url:          url,
 			ExtendFields: map[string]string{"url": url},
+			DedupeKey:    feedbackDedupeKey(req.StudentId, req.RecordID),
+			Source:       "feedback",
 		},
 	})
 	if err != nil {
