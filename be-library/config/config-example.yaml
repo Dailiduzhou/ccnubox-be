@@ -13,9 +13,8 @@ otel:
 crypto:
   secret: ""  # 仅供旧 crawler 迁移兼容；提醒模块动态获取 HMAC key
 
-# 默认关闭，旧部署不添加此段也不会启动提醒 worker 或连接 Feed。
 libraryReminder:
-  enabled: false
+  enabled: true
   preferenceSyncInterval: 15s
   preferenceFullSyncCron: "15 3 * * *"
   fullRefreshCron: "*/30 * * * *"
@@ -23,7 +22,12 @@ libraryReminder:
   activeScanCron: "*/5 * * * *"
   activeScanMinInterval: 4m
   jobDispatchCron: "* * * * *"
+  jobDispatchBatchSize: 100
+  jobDispatchBudget: 1000
+  jobDispatchConcurrency: 20
   outboxInterval: 2s
+  claimRecoveryInterval: 1m
+  claimTimeout: 30m
   userConcurrency: 20
   userJitter: 250ms
   upstreamRetryAttempts: 3
@@ -31,6 +35,7 @@ libraryReminder:
   requestTimeout: 8s
   historyPageSize: 20
   historyLookbackDays: 3
+  historyRetentionDays: 7
   retryMaxAttempts: 10
   baselineOnEnable: true
   dryRun: true

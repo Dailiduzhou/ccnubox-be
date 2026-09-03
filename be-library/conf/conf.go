@@ -27,26 +27,35 @@ type CryptoConf struct {
 }
 
 type LibraryReminderConf struct {
-	Enabled                bool                   `yaml:"enabled"`
-	PreferenceSyncInterval time.Duration          `yaml:"preferenceSyncInterval"`
-	PreferenceFullSyncCron string                 `yaml:"preferenceFullSyncCron"`
-	FullRefreshCron        string                 `yaml:"fullRefreshCron"`
-	FullRefreshMinInterval time.Duration          `yaml:"fullRefreshMinInterval"`
-	ActiveScanCron         string                 `yaml:"activeScanCron"`
-	ActiveScanMinInterval  time.Duration          `yaml:"activeScanMinInterval"`
-	JobDispatchCron        string                 `yaml:"jobDispatchCron"`
-	OutboxInterval         time.Duration          `yaml:"outboxInterval"`
-	UserConcurrency        int                    `yaml:"userConcurrency"`
-	UserJitter             time.Duration          `yaml:"userJitter"`
-	UpstreamRetryAttempts  int                    `yaml:"upstreamRetryAttempts"`
-	UpstreamQPS            int                    `yaml:"upstreamQPS"`
-	RequestTimeout         time.Duration          `yaml:"requestTimeout"`
-	HistoryPageSize        int                    `yaml:"historyPageSize"`
-	HistoryLookbackDays    int                    `yaml:"historyLookbackDays"`
-	RetryMaxAttempts       int                    `yaml:"retryMaxAttempts"`
-	BaselineOnEnable       *bool                  `yaml:"baselineOnEnable"`
-	DryRun                 *bool                  `yaml:"dryRun"`
-	NotificationTypes      *NotificationTypesConf `yaml:"notificationTypes"`
+	Enabled                bool          `yaml:"enabled"`
+	PreferenceSyncInterval time.Duration `yaml:"preferenceSyncInterval"`
+	PreferenceFullSyncCron string        `yaml:"preferenceFullSyncCron"`
+	// 全量刷新预约
+	FullRefreshCron        string        `yaml:"fullRefreshCron"`
+	FullRefreshMinInterval time.Duration `yaml:"fullRefreshMinInterval"`
+	// 扫描正在使用的预约
+	ActiveScanCron         string        `yaml:"activeScanCron"`
+	ActiveScanMinInterval  time.Duration `yaml:"activeScanMinInterval"`
+	JobDispatchCron        string        `yaml:"jobDispatchCron"`
+	JobDispatchBatchSize   int           `yaml:"jobDispatchBatchSize"`
+	JobDispatchBudget      int           `yaml:"jobDispatchBudget"`
+	JobDispatchConcurrency int           `yaml:"jobDispatchConcurrency"`
+	OutboxInterval         time.Duration `yaml:"outboxInterval"`
+	ClaimRecoveryInterval  time.Duration `yaml:"claimRecoveryInterval"`
+	ClaimTimeout           time.Duration `yaml:"claimTimeout"`
+	UserConcurrency        int           `yaml:"userConcurrency"`
+	UserJitter             time.Duration `yaml:"userJitter"`
+	UpstreamRetryAttempts  int           `yaml:"upstreamRetryAttempts"`
+	UpstreamQPS            int           `yaml:"upstreamQPS"`
+	RequestTimeout         time.Duration `yaml:"requestTimeout"`
+	HistoryPageSize        int           `yaml:"historyPageSize"`
+	HistoryLookbackDays    int           `yaml:"historyLookbackDays"`
+	HistoryRetentionDays   int           `yaml:"historyRetentionDays"`
+	RetryMaxAttempts       int           `yaml:"retryMaxAttempts"`
+	// 服务启动时，是否创建推送基线
+	BaselineOnEnable  *bool                  `yaml:"baselineOnEnable"`
+	DryRun            *bool                  `yaml:"dryRun"`
+	NotificationTypes *NotificationTypesConf `yaml:"notificationTypes"`
 }
 
 type NotificationTypesConf struct {
@@ -70,7 +79,12 @@ func (c *ServerConf) Reminder() LibraryReminderConf {
 		ActiveScanCron:         "*/5 * * * *",
 		ActiveScanMinInterval:  4 * time.Minute,
 		JobDispatchCron:        "* * * * *",
+		JobDispatchBatchSize:   100,
+		JobDispatchBudget:      1000,
+		JobDispatchConcurrency: 20,
 		OutboxInterval:         2 * time.Second,
+		ClaimRecoveryInterval:  time.Minute,
+		ClaimTimeout:           30 * time.Minute,
 		UserConcurrency:        20,
 		UserJitter:             250 * time.Millisecond,
 		UpstreamRetryAttempts:  3,
@@ -78,6 +92,7 @@ func (c *ServerConf) Reminder() LibraryReminderConf {
 		RequestTimeout:         8 * time.Second,
 		HistoryPageSize:        20,
 		HistoryLookbackDays:    3,
+		HistoryRetentionDays:   7,
 		RetryMaxAttempts:       10,
 		NotificationTypes: &NotificationTypesConf{
 			ReservationDiscovered: true,
@@ -121,8 +136,29 @@ func (c *ServerConf) Reminder() LibraryReminderConf {
 	if configured.JobDispatchCron != "" {
 		result.JobDispatchCron = configured.JobDispatchCron
 	}
+	if configured.JobDispatchBatchSize > 0 {
+		result.JobDispatchBatchSize = configured.JobDispatchBatchSize
+	}
+	if configured.JobDispatchBudget > 0 {
+		result.JobDispatchBudget = configured.JobDispatchBudget
+	}
+	if configured.JobDispatchConcurrency > 0 {
+		result.JobDispatchConcurrency = configured.JobDispatchConcurrency
+	}
+	if result.JobDispatchBatchSize > result.JobDispatchBudget {
+		result.JobDispatchBatchSize = result.JobDispatchBudget
+	}
+	if result.JobDispatchConcurrency > result.JobDispatchBatchSize {
+		result.JobDispatchConcurrency = result.JobDispatchBatchSize
+	}
 	if configured.OutboxInterval > 0 {
 		result.OutboxInterval = configured.OutboxInterval
+	}
+	if configured.ClaimRecoveryInterval > 0 {
+		result.ClaimRecoveryInterval = configured.ClaimRecoveryInterval
+	}
+	if configured.ClaimTimeout > 0 {
+		result.ClaimTimeout = configured.ClaimTimeout
 	}
 	if configured.UserConcurrency > 0 {
 		result.UserConcurrency = configured.UserConcurrency
@@ -144,6 +180,9 @@ func (c *ServerConf) Reminder() LibraryReminderConf {
 	}
 	if configured.HistoryLookbackDays > 0 {
 		result.HistoryLookbackDays = configured.HistoryLookbackDays
+	}
+	if configured.HistoryRetentionDays > 0 {
+		result.HistoryRetentionDays = configured.HistoryRetentionDays
 	}
 	if configured.RetryMaxAttempts > 0 {
 		result.RetryMaxAttempts = configured.RetryMaxAttempts
