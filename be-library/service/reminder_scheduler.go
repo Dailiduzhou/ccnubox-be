@@ -83,6 +83,10 @@ func (s *ReminderScheduler) Start() error {
 	s.cron.Start()
 	s.startLoop(ctx, "preference_sync", s.service.config.PreferenceSyncInterval, s.service.SyncPreferences, true)
 	s.startLoop(ctx, "outbox", s.service.config.OutboxInterval, s.service.SendOutbox, false)
+	// 瞬时数据库故障导致释放失败时，无需等待服务重启即可恢复超时 claim。
+	s.startLoop(ctx, "claim_recovery", s.service.config.ClaimRecoveryInterval, s.service.RecoverStaleWork, false)
+	// 终态记录的低频清理，避免每两秒的 outbox 聚合扫描无限增长的历史表。
+	s.startLoop(ctx, "history_cleanup", time.Hour, s.service.CleanupHistory, true)
 	return nil
 }
 
