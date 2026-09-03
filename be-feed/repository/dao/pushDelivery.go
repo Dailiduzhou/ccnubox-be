@@ -44,7 +44,7 @@ func (d *pushDeliveryDAO) ListDue(ctx context.Context, now int64, limit int) ([]
 	var deliveries []model.FeedPushDelivery
 	err := d.db.WithContext(ctx).
 		Where("status = ? AND next_attempt_at <= ?", model.PushDeliveryPending, now).
-		Order("next_attempt_at ASC, id ASC").
+		Order("priority DESC, next_attempt_at ASC, id ASC").
 		Limit(limit).
 		Find(&deliveries).Error
 	if err != nil {
