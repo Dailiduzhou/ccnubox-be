@@ -22,6 +22,9 @@ const (
 	pushDeliveryMaxBackoff     = time.Second << pushDeliveryMaxAttempts
 	pushDeliveryErrorLimit     = 2048
 	pushDeliveryStateTimeout   = 5 * time.Second
+	// pushDeliveryRecoverTimeout：sending 超过该时长才视为孤儿记录并恢复。
+	// 需大于单次投递的最长耗时（JPush HTTP 超时 15s + PreparePush/取 CID 等开销 + 状态回写窗口 5s）。
+	pushDeliveryRecoverTimeout = time.Minute
 )
 
 type PushDeliveryService interface {
@@ -38,7 +41,9 @@ type pushDeliveryService struct {
 }
 
 func (s *pushDeliveryService) RecoverSending(ctx context.Context) error {
-	return s.dao.RecoverSending(ctx)
+	// 只恢复超过超时时长的 sending，避免并发调用方误恢复彼此在途的记录。
+	before := time.Now().Add(-pushDeliveryRecoverTimeout).Unix()
+	return s.dao.RecoverSending(ctx, before)
 }
 
 func NewPushDeliveryService(deliveryDAO dao.PushDeliveryDAO, gate dao.FeedUserConfigDAO, push PushService, metricSet *metricsx.Metrics, log logger.Logger) PushDeliveryService {
@@ -56,9 +61,10 @@ func NewPushDeliveryService(deliveryDAO dao.PushDeliveryDAO, gate dao.FeedUserCo
 }
 
 func (s *pushDeliveryService) DispatchDue(ctx context.Context) error {
-	// 定时恢复上一次调用遗留的 sending。控制器不会重叠调用 DispatchDue，
-	// 因此单次调用内部的并发 worker 不会被这里误恢复。
-	if err := s.dao.RecoverSending(ctx); err != nil {
+	// 定时恢复遗留的 sending。控制器不会重叠调用 DispatchDue，
+	// 因此单次调用内部的并发 worker 不会被这里误恢复；
+	// 超时条件进一步保证即使将来出现并发调用方，也只恢复真正卡死的记录。
+	if err := s.RecoverSending(ctx); err != nil {
 		return err
 	}
 

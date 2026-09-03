@@ -9,7 +9,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const reminderConsumerName = "be-library-reminder"
+const (
+	reminderConsumerName         = "be-library-reminder"
+	preferenceReconcileBatchSize = 200
+)
 
 type PreferenceChange struct {
 	Revision  int64
@@ -155,61 +158,99 @@ func (d *ReminderDAO) reconcilePreferences(ctx context.Context, users []Preferen
 			authoritative[user.StudentID] = user.Revision
 		}
 	}
-	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	// 按主键分批加锁并提交，避免校准期间长时间锁住整张订阅表。
+	var afterID int64
+	for {
 		var existing []LibraryReminderSubscription
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Order("id ASC").Find(&existing).Error; err != nil {
-			return err
+		var batchEnabled []LibraryReminderSubscription
+		err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id > ?", afterID).Order("id ASC").Limit(preferenceReconcileBatchSize).
+				Find(&existing).Error; err != nil {
+				return err
+			}
+			for i := range existing {
+				sub := existing[i]
+				feedRevision, shouldEnable := authoritative[sub.StudentID]
+				if shouldEnable {
+					updates := map[string]any{}
+					if feedRevision > sub.FeedRevision {
+						updates["feed_revision"] = feedRevision
+					}
+					if !sub.Enabled {
+						updates["enabled"] = true
+						updates["baseline_completed"] = false
+						updates["preference_version"] = gorm.Expr("preference_version + 1")
+					}
+					if len(updates) > 0 {
+						if err := tx.Model(&sub).Updates(updates).Error; err != nil {
+							return err
+						}
+					}
+					if !sub.Enabled {
+						if err := tx.Where("id = ?", sub.ID).First(&sub).Error; err != nil {
+							return err
+						}
+						batchEnabled = append(batchEnabled, sub)
+					}
+					continue
+				}
+				if !sub.Enabled {
+					continue
+				}
+				if err := tx.Model(&sub).Updates(map[string]any{"enabled": false, "baseline_completed": false, "preference_version": gorm.Expr("preference_version + 1")}).Error; err != nil {
+					return err
+				}
+				if err := suppressStudentWorkTx(tx, sub.StudentID); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return enabled, err
+		}
+		if len(existing) == 0 {
+			break
 		}
 		for i := range existing {
-			sub := existing[i]
-			feedRevision, shouldEnable := authoritative[sub.StudentID]
-			if shouldEnable {
-				delete(authoritative, sub.StudentID)
-				updates := map[string]any{}
-				if feedRevision > sub.FeedRevision {
-					updates["feed_revision"] = feedRevision
-				}
-				if !sub.Enabled {
-					updates["enabled"] = true
-					updates["baseline_completed"] = false
-					updates["preference_version"] = gorm.Expr("preference_version + 1")
-				}
-				if len(updates) > 0 {
-					if err := tx.Model(&sub).Updates(updates).Error; err != nil {
-						return err
-					}
-				}
-				if !sub.Enabled {
-					if err := tx.Where("id = ?", sub.ID).First(&sub).Error; err != nil {
-						return err
-					}
-					enabled = append(enabled, sub)
-				}
-				continue
-			}
-			if !sub.Enabled {
-				continue
-			}
-			if err := tx.Model(&sub).Updates(map[string]any{"enabled": false, "baseline_completed": false, "preference_version": gorm.Expr("preference_version + 1")}).Error; err != nil {
-				return err
-			}
-			if err := suppressStudentWorkTx(tx, sub.StudentID); err != nil {
-				return err
-			}
+			delete(authoritative, existing[i].StudentID)
 		}
-		for studentID, feedRevision := range authoritative {
-			sub := LibraryReminderSubscription{StudentID: studentID, Enabled: true, FeedRevision: feedRevision, PreferenceVersion: 1, AuthStatus: SubscriptionAuthUnknown}
-			if err := tx.Create(&sub).Error; err != nil {
-				return err
-			}
-			enabled = append(enabled, sub)
-		}
-		if !updateCursor {
+		enabled = append(enabled, batchEnabled...)
+		afterID = existing[len(existing)-1].ID
+	}
+
+	// 新增订阅也分批提交，限制单次事务时长和 SQL 体积。
+	missing := make([]LibraryReminderSubscription, 0, preferenceReconcileBatchSize)
+	createMissing := func() error {
+		if len(missing) == 0 {
 			return nil
 		}
-		cursor := LibraryPreferenceSyncCursor{ConsumerName: reminderConsumerName, LastRevision: revision}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "consumer_name"}}, DoUpdates: clause.AssignmentColumns([]string{"last_revision", "updated_at"})}).Create(&cursor).Error
-	})
+		if err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			return tx.Create(&missing).Error
+		}); err != nil {
+			return err
+		}
+		enabled = append(enabled, missing...)
+		missing = missing[:0]
+		return nil
+	}
+	for studentID, feedRevision := range authoritative {
+		missing = append(missing, LibraryReminderSubscription{StudentID: studentID, Enabled: true, FeedRevision: feedRevision, PreferenceVersion: 1, AuthStatus: SubscriptionAuthUnknown})
+		if len(missing) == preferenceReconcileBatchSize {
+			if err := createMissing(); err != nil {
+				return enabled, err
+			}
+		}
+	}
+	if err := createMissing(); err != nil {
+		return enabled, err
+	}
+	if !updateCursor {
+		return enabled, nil
+	}
+	cursor := LibraryPreferenceSyncCursor{ConsumerName: reminderConsumerName, LastRevision: revision}
+	err := d.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "consumer_name"}}, DoUpdates: clause.AssignmentColumns([]string{"last_revision", "updated_at"})}).Create(&cursor).Error
 	return enabled, err
 }
 
@@ -347,8 +388,10 @@ func (d *ReminderDAO) MarkBaseline(ctx context.Context, studentID string, at tim
 		Updates(map[string]any{"baseline_completed": true, "last_full_refresh_at": at, "auth_status": authStatus}).Error
 }
 
-func (d *ReminderDAO) MarkRefreshFailure(ctx context.Context, studentID, authStatus string) error {
-	return d.db.WithContext(ctx).Model(&LibraryReminderSubscription{}).Where("student_id = ?", studentID).Update("auth_status", authStatus).Error
+func (d *ReminderDAO) MarkRefreshFailure(ctx context.Context, studentID string, preferenceVersion int64, authStatus string) error {
+	return d.db.WithContext(ctx).Model(&LibraryReminderSubscription{}).
+		Where("student_id = ? AND preference_version = ?", studentID, preferenceVersion).
+		Update("auth_status", authStatus).Error
 }
 
 func (d *ReminderDAO) MarkActiveScan(ctx context.Context, studentID string, at time.Time) error {
@@ -584,7 +627,16 @@ func (d *ReminderDAO) FinishJob(ctx context.Context, job NotificationJob, status
 	if next != nil {
 		updates["run_at"] = *next
 	}
-	return d.db.WithContext(ctx).Model(&NotificationJob{}).Where("id = ? AND status = ? AND version = ?", job.ID, JobRunning, job.Version).Updates(updates).Error
+	result := d.db.WithContext(ctx).Model(&NotificationJob{}).
+		Where("id = ? AND status = ? AND version = ?", job.ID, JobRunning, job.Version).
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (d *ReminderDAO) ClaimOutbox(ctx context.Context, now time.Time, limit, maxAttempts int) ([]NotificationOutbox, error) {
@@ -646,9 +698,16 @@ func (d *ReminderDAO) FinishOutbox(ctx context.Context, row NotificationOutbox, 
 		now := time.Now()
 		updates["sent_at"] = now
 	}
-	return d.db.WithContext(ctx).Model(&NotificationOutbox{}).
+	result := d.db.WithContext(ctx).Model(&NotificationOutbox{}).
 		Where("id = ? AND status = ? AND attempts = ?", row.ID, OutboxSending, row.Attempts).
-		Updates(updates).Error
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (d *ReminderDAO) CanSendOutbox(ctx context.Context, row NotificationOutbox) (bool, error) {

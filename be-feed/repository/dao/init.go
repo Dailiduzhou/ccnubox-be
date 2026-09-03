@@ -1,6 +1,9 @@
 package dao
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/asynccnu/ccnubox-be/be-feed/repository/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -133,7 +136,7 @@ func initFeedUserConfigRevisionAllocator(db *gorm.DB) error {
 				ID:       model.FeedUserConfigRevisionAllocatorID,
 				Revision: latest,
 			}
-			return tx.Create(&allocator).Error
+			return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&allocator).Error
 		}
 		if allocator.Revision < latest {
 			return tx.Model(&allocator).UpdateColumn("revision", latest).Error
@@ -142,16 +145,20 @@ func initFeedUserConfigRevisionAllocator(db *gorm.DB) error {
 	})
 }
 
-// 首次迁移图书馆开关时，将尚无偏好版本的已有用户默认设为开启。
+const initialLibraryPreferenceMigrationBatchSize = 200
+
+// 首次迁移图书馆开关时，将尚无偏好版本的已有用户默认设为开启并记录增量变更。
 func migrateInitialLibraryPreference(db *gorm.DB) error {
 	return db.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&model.FeedUserConfig{}).
+		var configs []model.FeedUserConfig
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id", "student_id").
 			Where("library_revision = 0").
-			Count(&count).Error; err != nil {
+			Order("id ASC").
+			Find(&configs).Error; err != nil {
 			return err
 		}
-		if count == 0 {
+		if len(configs) == 0 {
 			return nil
 		}
 
@@ -160,18 +167,52 @@ func migrateInitialLibraryPreference(db *gorm.DB) error {
 			First(&allocator, model.FeedUserConfigRevisionAllocatorID).Error; err != nil {
 			return err
 		}
-		if allocator.Revision == 0 {
-			allocator.Revision = 1
-			if err := tx.Model(&allocator).UpdateColumn("revision", allocator.Revision).Error; err != nil {
-				return err
+
+		changes := make([]model.FeedUserConfigChange, len(configs))
+		firstRevision := allocator.Revision + 1
+		for i := range configs {
+			changes[i] = model.FeedUserConfigChange{
+				Revision:       firstRevision + int64(i),
+				StudentId:      configs[i].StudentId,
+				LibraryEnabled: true,
 			}
 		}
+		allocator.Revision += int64(len(configs))
+		if err := tx.Model(&allocator).UpdateColumn("revision", allocator.Revision).Error; err != nil {
+			return err
+		}
+		if err := tx.CreateInBatches(&changes, initialLibraryPreferenceMigrationBatchSize).Error; err != nil {
+			return err
+		}
 
-		return tx.Model(&model.FeedUserConfig{}).
-			Where("library_revision = 0").
-			UpdateColumns(map[string]any{
-				"push_config":      gorm.Expr("push_config | ?", uint16(1<<model.LibraryPos)),
-				"library_revision": allocator.Revision,
-			}).Error
+		for start := 0; start < len(configs); start += initialLibraryPreferenceMigrationBatchSize {
+			end := min(start+initialLibraryPreferenceMigrationBatchSize, len(configs))
+			batch := configs[start:end]
+			ids := make([]int64, len(batch))
+			args := make([]any, 0, len(batch)*2)
+			var revisionCase strings.Builder
+			revisionCase.WriteString("CASE id")
+			for i := range batch {
+				revision := firstRevision + int64(start+i)
+				revisionCase.WriteString(" WHEN ? THEN ?")
+				args = append(args, batch[i].ID, revision)
+				ids[i] = batch[i].ID
+			}
+			revisionCase.WriteString(" ELSE library_revision END")
+
+			result := tx.Model(&model.FeedUserConfig{}).
+				Where("id IN ? AND library_revision = 0", ids).
+				UpdateColumns(map[string]any{
+					"push_config":      gorm.Expr("push_config | ?", uint16(1<<model.LibraryPos)),
+					"library_revision": gorm.Expr(revisionCase.String(), args...),
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != int64(len(batch)) {
+				return fmt.Errorf("migrate initial library preference: updated %d configs, want %d", result.RowsAffected, len(batch))
+			}
+		}
+		return nil
 	})
 }
