@@ -23,7 +23,12 @@ libraryReminder:
   activeScanCron: "*/5 * * * *"
   activeScanMinInterval: 4m
   jobDispatchCron: "* * * * *"
+  jobDispatchBatchSize: 100
+  jobDispatchBudget: 1000
+  jobDispatchConcurrency: 20
   outboxInterval: 2s
+  claimRecoveryInterval: 1m
+  claimTimeout: 30m
   userConcurrency: 20
   userJitter: 250ms
   upstreamRetryAttempts: 3
@@ -31,6 +36,7 @@ libraryReminder:
   requestTimeout: 8s
   historyPageSize: 20
   historyLookbackDays: 3
+  historyRetentionDays: 7
   retryMaxAttempts: 10
   baselineOnEnable: true
   dryRun: true

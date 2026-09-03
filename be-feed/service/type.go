@@ -18,7 +18,7 @@ func convFeedEventsFromModelToDomain(feedEvents []model.FeedEvent) []domain.Feed
 			Url:          feedEvents[i].Url,
 			ExtendFields: feedEvents[i].ExtendFields,
 			CreatedAt:    feedEvents[i].CreatedAt,
-			DedupeKey:    stringValue(feedEvents[i].DedupeKey),
+			DedupeKey:    feedEvents[i].DedupeKey,
 			Source:       feedEvents[i].Source,
 			OccurredAt:   feedEvents[i].OccurredAt,
 		}
@@ -27,11 +27,6 @@ func convFeedEventsFromModelToDomain(feedEvents []model.FeedEvent) []domain.Feed
 }
 
 func convFeedEventFromDomainToModel(feedEvent *domain.FeedEvent) *model.FeedEvent {
-	var dedupeKey *string
-	if feedEvent.DedupeKey != "" {
-		value := feedEvent.DedupeKey
-		dedupeKey = &value
-	}
 	return &model.FeedEvent{ // 通过索引直接赋值
 		StudentId:    feedEvent.StudentId,
 		Type:         feedEvent.Type,
@@ -39,7 +34,7 @@ func convFeedEventFromDomainToModel(feedEvent *domain.FeedEvent) *model.FeedEven
 		Content:      feedEvent.Content,
 		Url:          feedEvent.Url,
 		ExtendFields: feedEvent.ExtendFields,
-		DedupeKey:    dedupeKey,
+		DedupeKey:    feedEvent.DedupeKey,
 		Source:       feedEvent.Source,
 		OccurredAt:   feedEvent.OccurredAt,
 	}
@@ -51,13 +46,6 @@ func convFeedEventsFromDomainToModel(feedEvents []domain.FeedEvent) []model.Feed
 		result[i] = *convFeedEventFromDomainToModel(&feedEvents[i])
 	}
 	return result
-}
-
-func stringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func convFeedEventFromModelToDomainVO(feedEvents []model.FeedEvent) []domain.FeedEventVO {

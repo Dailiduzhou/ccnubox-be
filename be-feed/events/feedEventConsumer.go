@@ -3,6 +3,8 @@ package events
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/asynccnu/ccnubox-be/be-feed/service"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/asynccnu/ccnubox-be/common/pkg/metricsx"
+	"github.com/go-sql-driver/mysql"
 )
 
 // FeedEventConsumerHandler 是处理 Feed 事件消费的结构体
@@ -159,11 +162,14 @@ func (h *feedEventKafkaHandler) consumeMessage(ctx context.Context, message *sar
 		logh.Error("feed event message discarded: invalid payload", append(fields, logger.Error(err))...)
 		return true, nil
 	}
-	if len(event.Url) > domain.MaxFeedEventURLBytes {
+	if strings.TrimSpace(event.DedupeKey) == "" {
+		// 旧生产者没有消息 ID 时使用 Kafka 坐标兜底，同一条消息重投仍得到相同 key。
+		event.DedupeKey = domain.KafkaFeedEventDedupeKey(message.Topic, message.Partition, message.Offset, event.StudentId)
+	}
+	if err := domain.ValidateFeedEventForStorage(event); err != nil {
 		h.consumer.recordFailure("invalid_event", 1)
 		h.consumer.recordConsumed("Discarded", 1)
-		logh.Error("feed event message discarded: url exceeds storage limit",
-			append(fields, logger.Int("url_size", len(event.Url)))...)
+		logh.Error("feed event message discarded: invalid storage fields", append(fields, logger.Error(err))...)
 		return true, nil
 	}
 
@@ -179,6 +185,13 @@ func (h *feedEventKafkaHandler) consumeMessage(ctx context.Context, message *sar
 		}
 		if ctx.Err() != nil {
 			return false, nil
+		}
+		if isPermanentFeedStorageError(consumeErr) {
+			h.consumer.recordFailure("permanent_db_error", 1)
+			h.consumer.recordConsumed("Discarded", 1)
+			logh.Error("feed event message discarded: permanent storage error",
+				append(fields, logger.Error(consumeErr))...)
+			return true, nil
 		}
 		if attempt == maxFeedConsumeAttempts {
 			break
@@ -208,4 +221,27 @@ func (h *feedEventKafkaHandler) consumeMessage(ctx context.Context, message *sar
 			logger.Error(consumeErr),
 		)...)
 	return false, consumeErr
+}
+
+func isPermanentFeedStorageError(err error) bool {
+	var validationErr *domain.FeedEventValidationError
+	if errors.As(err, &validationErr) {
+		return true
+	}
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	switch mysqlErr.Number {
+	case 1048, // column cannot be null
+		1062,       // duplicate key outside the expected dedupe conflict
+		1264,       // out of range
+		1292,       // invalid or truncated value
+		1366,       // incorrect string value
+		1406,       // data too long
+		3819, 4025: // check constraint violation (MySQL/MariaDB)
+		return true
+	default:
+		return false
+	}
 }

@@ -41,12 +41,12 @@ type FeedEvent struct {
 	BaseModel
 	Read         bool         `gorm:"column:read;type:BOOLEAN;not null"`
 	Type         string       `gorm:"column:type;type:VARCHAR(255);not null"`
-	StudentId    string       `gorm:"column:student_id;type:varchar(255);not null"` // 学生 ID，唯一
-	Title        string       `gorm:"column:title;type:TEXT;not null"`              // 标题
-	Content      string       `gorm:"column:content;type:TEXT"`                     // 内容
-	Url          string       `gorm:"column:url;type:varchar(2047)"`                // 消息详情跳转路由
-	ExtendFields ExtendFields `gorm:"column:extend_fields;type:TEXT"`               // 拓展字段
-	DedupeKey    *string      `gorm:"column:dedupe_key;type:varchar(255);uniqueIndex:uidx_feed_events_dedupe"`
+	StudentId    string       `gorm:"column:student_id;type:varchar(255);not null;uniqueIndex:uidx_feed_events_recipient_dedupe,priority:1"` // 学生 ID
+	Title        string       `gorm:"column:title;type:TEXT;not null"`                                                                       // 标题
+	Content      string       `gorm:"column:content;type:TEXT"`                                                                              // 内容
+	Url          string       `gorm:"column:url;type:varchar(2047)"`                                                                         // 消息详情跳转路由
+	ExtendFields ExtendFields `gorm:"column:extend_fields;type:TEXT"`                                                                        // 拓展字段
+	DedupeKey    string       `gorm:"column:dedupe_key;type:varchar(255);not null;uniqueIndex:uidx_feed_events_recipient_dedupe,priority:2"`
 	Source       string       `gorm:"column:source;type:varchar(64)"`
 	OccurredAt   int64        `gorm:"column:occurred_at;not null;default:0"`
 }
@@ -71,10 +71,12 @@ const (
 	LibraryPos
 )
 
+const DefaultPushConfig uint16 = (1 << (LibraryPos + 1)) - 1
+
 // FeedUserConfig 表示用户的 Feed 配置
 type FeedUserConfig struct {
 	StudentId       string `gorm:"column:student_id;type:varchar(255);not null;uniqueIndex"`
-	PushConfig      uint16 `gorm:"column:push_config;type:SMALLINT UNSIGNED;not null;default:31"` // 16位二进制，默认值 0000 0000 0001 1111 (十进制 31)
+	PushConfig      uint16 `gorm:"column:push_config;type:SMALLINT UNSIGNED;not null;default:63"` // 16位二进制，默认值 0000 0000 0011 1111 (十进制 63)
 	LibraryRevision int64  `gorm:"column:library_revision;not null;default:0"`
 	BaseModel
 }
@@ -115,9 +117,10 @@ type FeedPushDelivery struct {
 	FeedEventID   int64  `gorm:"column:feed_event_id;not null;uniqueIndex"`
 	StudentId     string `gorm:"column:student_id;type:varchar(255);not null;index"`
 	CID           string `gorm:"column:cid;type:varchar(255);not null;default:''"`
-	Status        string `gorm:"column:status;type:varchar(16);not null;default:pending;index:idx_feed_push_due,priority:1"`
+	Status        string `gorm:"column:status;type:varchar(16);not null;default:pending;index:idx_feed_push_due,priority:1;index:idx_feed_push_priority_due,priority:1"`
+	Priority      int    `gorm:"column:priority;not null;default:0;index:idx_feed_push_priority_due,priority:2,sort:desc"`
 	Attempts      int    `gorm:"column:attempts;not null;default:0"`
-	NextAttemptAt int64  `gorm:"column:next_attempt_at;not null;default:0;index:idx_feed_push_due,priority:2"`
+	NextAttemptAt int64  `gorm:"column:next_attempt_at;not null;default:0;index:idx_feed_push_due,priority:2;index:idx_feed_push_priority_due,priority:3"`
 	LastError     string `gorm:"column:last_error;type:text"`
 }
 

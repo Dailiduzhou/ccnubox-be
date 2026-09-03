@@ -36,7 +36,9 @@ const (
 	NotificationBreach                = "BREACH"
 	NotificationBlacklisted           = "BLACKLISTED"
 
-	reservationStatusMaxBytes = 32
+	reservationStatusMaxBytes   = 32
+	notificationMessageMaxBytes = 8 << 10
+	claimReleaseTimeout         = 5 * time.Second
 )
 
 type notificationPayload struct {
@@ -145,6 +147,10 @@ func (s *ReminderService) Enabled() bool { return s.config.Enabled }
 
 func (s *ReminderService) RecoverOrphanedWork(ctx context.Context) error {
 	return s.dao.RecoverOrphanedWork(ctx)
+}
+
+func (s *ReminderService) RecoverStaleWork(ctx context.Context) error {
+	return s.dao.RecoverStaleWork(ctx, s.now().Add(-s.config.ClaimTimeout))
 }
 
 func (s *ReminderService) SuppressDisabledWork(ctx context.Context) error {
@@ -337,6 +343,10 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 		}
 		s.metrics.RefreshUsersTotal.WithLabelValues(result).Inc()
 	}()
+	return s.runUserOperation(ctx, sub, "full_refresh", s.config.FullRefreshMinInterval, s.refreshUserAttempt)
+}
+
+func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.LibraryReminderSubscription) error {
 	current, err := s.dao.Subscription(ctx, sub.StudentID)
 	if err != nil || !current.Enabled || current.PreferenceVersion != sub.PreferenceVersion {
 		if err != nil {
@@ -344,11 +354,6 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 		}
 		return nil
 	}
-	finish, started := s.userTaskGate.start(sub.StudentID, "full_refresh", sub.PreferenceVersion, s.now(), s.config.FullRefreshMinInterval)
-	if !started {
-		return nil
-	}
-	defer func() { finish(err == nil, s.now()) }()
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, libraryTokenFailureStatus(err))
@@ -381,15 +386,6 @@ func (s *ReminderService) RefreshUser(ctx context.Context, sub dao.LibraryRemind
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
 		return err
-	}
-	if s.config.NotificationTypes.Breach && state.BreachNum > 0 {
-		if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
-			return err
-		}
-		if _, err := s.crawler.GetBreaches(ctx, token, 0, s.config.HistoryPageSize); err != nil {
-			_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
-			return err
-		}
 	}
 	// 部分历史分页可安全用于更新插入和新增事实，但不能据此执行“缺失即取消”的状态转换。
 	reservations := make(map[string]crawler.ReminderReservation, len(today)+len(history.Reservations))
@@ -449,7 +445,8 @@ func (s *ReminderService) reconcileReservation(ctx context.Context, sub dao.Libr
 		}
 	}
 	if s.config.NotificationTypes.Start30 && start.After(now) {
-		runAt := start.Add(-30 * time.Minute)
+		targetAt := start.Add(-30 * time.Minute)
+		runAt := targetAt
 		if runAt.Before(now) {
 			runAt = now
 		}
@@ -457,14 +454,15 @@ func (s *ReminderService) reconcileReservation(ctx context.Context, sub dao.Libr
 		if err := s.dao.CancelStaleReservationJobType(ctx, sub.StudentID, row.ID, NotificationStart30, key); err != nil {
 			return err
 		}
-		if err := s.scheduleJob(ctx, sub, NotificationStart30, row.ID, 0, runAt, start.Unix()); err != nil {
+		if err := s.scheduleJob(ctx, sub, NotificationStart30, row.ID, 0, runAt, targetAt, &start, start.Unix()); err != nil {
 			return err
 		}
 	} else if err := s.dao.CancelReservationJobTypes(ctx, sub.StudentID, row.ID, []string{NotificationStart30}); err != nil {
 		return err
 	}
 	if s.config.NotificationTypes.End10 && end.After(now) {
-		runAt := end.Add(-10 * time.Minute)
+		targetAt := end.Add(-10 * time.Minute)
+		runAt := targetAt
 		if runAt.Before(now) {
 			runAt = now
 		}
@@ -472,7 +470,7 @@ func (s *ReminderService) reconcileReservation(ctx context.Context, sub dao.Libr
 		if err := s.dao.CancelStaleReservationJobType(ctx, sub.StudentID, row.ID, NotificationEnd10, key); err != nil {
 			return err
 		}
-		if err := s.scheduleJob(ctx, sub, NotificationEnd10, row.ID, 0, runAt, end.Unix()); err != nil {
+		if err := s.scheduleJob(ctx, sub, NotificationEnd10, row.ID, 0, runAt, targetAt, &end, end.Unix()); err != nil {
 			return err
 		}
 	} else if err := s.dao.CancelReservationJobTypes(ctx, sub.StudentID, row.ID, []string{NotificationEnd10}); err != nil {
@@ -498,14 +496,23 @@ func (s *ReminderService) reconcileUserState(ctx context.Context, sub dao.Librar
 			return err
 		}
 	}
-	enteredBlacklist := (previous.BlackTime == "" && state.BlackTime != "") || (previous.BlackMessage == "" && state.BlackMessage != "") || (state.BlackTime != "" && state.BlackTime != previous.BlackTime)
+	previousBlackTime := strings.TrimSpace(previous.BlackTime)
+	blackTime := strings.TrimSpace(state.BlackTime)
+	wasBlacklisted := previousBlackTime != "" || strings.TrimSpace(previous.BlackMessage) != ""
+	isBlacklisted := blackTime != "" || strings.TrimSpace(state.BlackMessage) != ""
+	blackTimeChanged := previousBlackTime != "" && blackTime != "" && blackTime != previousBlackTime
+	enteredBlacklist := (!wasBlacklisted && isBlacklisted) || blackTimeChanged
 	if s.config.NotificationTypes.Blacklisted && enteredBlacklist {
-		key := boundedDedupeKey(fmt.Sprintf("%s:%s:%s", sub.StudentID, state.BlackTime, NotificationBlacklisted))
-		message := strings.TrimSpace(state.BlackMessage)
-		if message == "" && strings.TrimSpace(state.BlackTime) != "" {
-			message = "图书馆预约权限已暂停至 " + strings.TrimSpace(state.BlackTime) + "。"
+		episode, err := s.dao.AdvanceBlacklistEpisode(ctx, sub.StudentID, previous.BlacklistEpisode)
+		if err != nil {
+			return err
 		}
-		payload := notificationPayload{NotificationType: NotificationBlacklisted, TargetAt: now.Unix(), Message: message}
+		key := boundedDedupeKey(fmt.Sprintf("%s:%s:%d", sub.StudentID, NotificationBlacklisted, episode))
+		message := strings.TrimSpace(state.BlackMessage)
+		if message == "" && blackTime != "" {
+			message = "图书馆预约权限已暂停至 " + blackTime + "。"
+		}
+		payload := notificationPayload{NotificationType: NotificationBlacklisted, TargetAt: now.Unix(), EpisodeVersion: episode, Message: message}
 		return s.enqueuePayload(ctx, sub, key, NotificationBlacklisted, payload)
 	}
 	return nil
@@ -527,16 +534,15 @@ func (s *ReminderService) ScanActive(ctx context.Context) error {
 	return s.forEachSubscription(ctx, rows, s.scanActiveUser)
 }
 
-func (s *ReminderService) scanActiveUser(ctx context.Context, sub dao.LibraryReminderSubscription) (err error) {
+func (s *ReminderService) scanActiveUser(ctx context.Context, sub dao.LibraryReminderSubscription) error {
+	return s.runUserOperation(ctx, sub, "active_scan", s.config.ActiveScanMinInterval, s.scanActiveUserAttempt)
+}
+
+func (s *ReminderService) scanActiveUserAttempt(ctx context.Context, sub dao.LibraryReminderSubscription) error {
 	currentSub, err := s.dao.Subscription(ctx, sub.StudentID)
 	if err != nil || !currentSub.Enabled || currentSub.PreferenceVersion != sub.PreferenceVersion {
 		return err
 	}
-	finish, started := s.userTaskGate.start(sub.StudentID, "active_scan", sub.PreferenceVersion, s.now(), s.config.ActiveScanMinInterval)
-	if !started {
-		return nil
-	}
-	defer func() { finish(err == nil, s.now()) }()
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
 		return err
@@ -622,12 +628,14 @@ func (s *ReminderService) applyActiveObservation(ctx context.Context, sub dao.Li
 		return err
 	}
 	if s.config.NotificationTypes.Away60 {
-		if err := s.scheduleJob(ctx, sub, NotificationAway60, current.ID, version, episode.AwayStartedAt.Add(60*time.Minute), int64(version)); err != nil {
+		targetAt := episode.AwayStartedAt.Add(60 * time.Minute)
+		if err := s.scheduleJob(ctx, sub, NotificationAway60, current.ID, version, targetAt, targetAt, nil, int64(version)); err != nil {
 			return err
 		}
 	}
 	if s.config.NotificationTypes.Away80 {
-		if err := s.scheduleJob(ctx, sub, NotificationAway80, current.ID, version, episode.AwayStartedAt.Add(80*time.Minute), int64(version)); err != nil {
+		targetAt := episode.AwayStartedAt.Add(80 * time.Minute)
+		if err := s.scheduleJob(ctx, sub, NotificationAway80, current.ID, version, targetAt, targetAt, nil, int64(version)); err != nil {
 			return err
 		}
 	}
@@ -710,21 +718,79 @@ func (s *ReminderService) DispatchJobs(ctx context.Context) (err error) {
 	if !s.Enabled() {
 		return nil
 	}
-	jobs, err := s.dao.ClaimDueJobs(ctx, s.now(), 100)
-	if err != nil {
-		return err
-	}
-	for _, job := range jobs {
-		if err := s.dispatchJob(ctx, job); err != nil {
-			s.logger.Warn("library reminder job failed", logger.Int64("job_id", job.ID), logger.String("notification_type", job.Type), logger.Error(err))
+	processed := 0
+	for processed < s.config.JobDispatchBudget {
+		limit := min(s.config.JobDispatchBatchSize, s.config.JobDispatchBudget-processed)
+		jobs, claimErr := s.dao.ClaimDueJobs(ctx, s.now(), limit)
+		if claimErr != nil {
+			// claim 逐条执行，失败前已认领的任务也必须使用独立上下文释放。
+			s.releaseClaimedJobs(ctx, jobs)
+			return claimErr
+		}
+		if len(jobs) == 0 {
+			return nil
+		}
+		processed += len(jobs)
+		if err := s.dispatchJobBatch(ctx, jobs); err != nil {
+			return err
+		}
+		if len(jobs) < limit {
+			return nil
 		}
 	}
 	return nil
 }
 
+func (s *ReminderService) dispatchJobBatch(ctx context.Context, jobs []dao.NotificationJob) error {
+	limit := min(s.config.JobDispatchConcurrency, len(jobs))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	var launchErr error
+launch:
+	for i := range jobs {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			s.releaseClaimedJobs(ctx, jobs[i:])
+			launchErr = ctx.Err()
+			break launch
+		}
+		job := jobs[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := s.dispatchJob(ctx, job); err != nil {
+				s.logger.Warn("library reminder job failed", logger.Int64("job_id", job.ID), logger.String("notification_type", job.Type), logger.Error(err))
+				// dispatchJob 可能已完成重排；释放操作只会命中仍属于当前 claim 的 running 记录。
+				s.releaseClaimedJobs(ctx, []dao.NotificationJob{job})
+			}
+		}()
+	}
+	wg.Wait()
+	if launchErr != nil {
+		return launchErr
+	}
+	return ctx.Err()
+}
+
+func (s *ReminderService) releaseClaimedJobs(parent context.Context, jobs []dao.NotificationJob) {
+	if len(jobs) == 0 {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), claimReleaseTimeout)
+	defer cancel()
+	if err := s.dao.ReleaseClaimedJobs(releaseCtx, jobs); err != nil {
+		s.logger.Warn("release claimed library reminder jobs failed", logger.Int("count", len(jobs)), logger.Error(err))
+	}
+}
+
 func (s *ReminderService) dispatchJob(ctx context.Context, job dao.NotificationJob) error {
 	if !s.notificationEnabled(job.Type) {
 		return s.dao.FinishJob(ctx, job, dao.JobSuppressed, dao.SuppressedReasonNotificationTypeDisabled, nil)
+	}
+	if job.ExpiresAt != nil && !job.ExpiresAt.After(s.now()) {
+		return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "notification expired", nil)
 	}
 	sub, err := s.dao.Subscription(ctx, job.StudentID)
 	if err != nil {
@@ -763,6 +829,7 @@ func (s *ReminderService) dispatchJob(ctx context.Context, job dao.NotificationJ
 			return s.dao.FinishJob(ctx, job, dao.JobPending, "", &next)
 		}
 	}
+	var verifiedReservation *crawler.ReminderReservation
 	if job.Type == NotificationStart30 || job.Type == NotificationEnd10 {
 		token, err := s.libraryToken(ctx, job.StudentID)
 		if err != nil {
@@ -775,32 +842,55 @@ func (s *ReminderService) dispatchJob(ctx context.Context, job dao.NotificationJ
 		if err != nil {
 			return s.retryJob(ctx, job, err)
 		}
-		active := false
-		for _, reservation := range reservations {
-			if reservation.ID == job.ExternalReservationID {
-				active = !terminalReservationStatus(reservation.Status)
-				break
+		for i := range reservations {
+			reservation := &reservations[i]
+			if reservation.ID != job.ExternalReservationID || terminalReservationStatus(reservation.Status) {
+				continue
 			}
+			start, end, err := reservation.Times()
+			if err != nil {
+				return s.retryJob(ctx, job, err)
+			}
+			expectedTarget, expectedExpiry := start.Add(-30*time.Minute), start
+			if job.Type == NotificationEnd10 {
+				expectedTarget, expectedExpiry = end.Add(-10*time.Minute), end
+			}
+			if job.TargetAt.IsZero() || !job.TargetAt.Equal(expectedTarget) || job.ExpiresAt == nil || !job.ExpiresAt.Equal(expectedExpiry) {
+				return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "reservation time changed", nil)
+			}
+			if !expectedExpiry.After(s.now()) {
+				return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "notification expired", nil)
+			}
+			verifiedReservation = reservation
+			break
 		}
-		if !active {
+		if verifiedReservation == nil {
 			return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "reservation no longer active", nil)
 		}
 	}
 	var start, end time.Time
 	var seatID, seatLabel, location string
-	if job.ExternalReservationID != "" {
+	if verifiedReservation != nil {
+		start, end, _ = verifiedReservation.Times()
+		seatID, seatLabel, location = verifiedReservation.SeatID, verifiedReservation.SeatLabel, verifiedReservation.Location
+	} else if job.ExternalReservationID != "" {
 		reservation, findErr := s.dao.Reservation(ctx, job.StudentID, job.ExternalReservationID)
 		if findErr != nil {
 			return s.retryJob(ctx, job, findErr)
 		}
 		start, end, seatID, seatLabel, location = reservation.StartAt, reservation.EndAt, reservation.SeatID, reservation.SeatLabel, reservation.Location
 	}
-	payload := notificationPayload{NotificationType: job.Type, ReservationID: job.ExternalReservationID, SeatID: seatID, SeatLabel: seatLabel, Location: location, StartAt: start.Unix(), EndAt: end.Unix(), TargetAt: job.RunAt.Unix(), EpisodeVersion: job.EpisodeVersion}
+	targetAt := job.TargetAt
+	if targetAt.IsZero() {
+		// 兼容自动迁移后尚未来得及由扫描补齐目标时间的暂离任务。
+		targetAt = job.RunAt
+	}
+	payload := notificationPayload{NotificationType: job.Type, ReservationID: job.ExternalReservationID, SeatID: seatID, SeatLabel: seatLabel, Location: location, StartAt: start.Unix(), EndAt: end.Unix(), TargetAt: targetAt.Unix(), EpisodeVersion: job.EpisodeVersion}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return s.retryJob(ctx, job, err)
 	}
-	outbox := &dao.NotificationOutbox{DedupeKey: job.LogicalKey, StudentID: job.StudentID, ExternalReservationID: job.ExternalReservationID, PreferenceVersion: job.PreferenceVersion, Type: job.Type, Payload: raw, Status: dao.OutboxPending, NextAttemptAt: s.now()}
+	outbox := &dao.NotificationOutbox{DedupeKey: job.LogicalKey, StudentID: job.StudentID, ExternalReservationID: job.ExternalReservationID, PreferenceVersion: job.PreferenceVersion, Type: job.Type, Payload: raw, Status: dao.OutboxPending, NextAttemptAt: s.now(), ExpiresAt: job.ExpiresAt}
 	return s.dao.CompleteJobAndEnqueue(ctx, job, outbox)
 }
 
@@ -810,10 +900,22 @@ func (s *ReminderService) retryJob(ctx context.Context, job dao.NotificationJob,
 	}
 	delay := time.Duration(1<<min(job.Attempts, 6)) * time.Minute
 	next := s.now().Add(delay)
+	if job.ExpiresAt != nil && !next.Before(*job.ExpiresAt) {
+		return s.dao.FinishJob(ctx, job, dao.JobSuppressed, "notification expired before retry", nil)
+	}
 	if err := s.dao.FinishJob(ctx, job, dao.JobPending, "transient failure", &next); err != nil {
 		return err
 	}
 	return cause
+}
+
+// CleanupHistory 清理超过保留期的终态任务与 outbox 记录，控制历史表规模。
+func (s *ReminderService) CleanupHistory(ctx context.Context) error {
+	if !s.Enabled() {
+		return nil
+	}
+	before := s.now().AddDate(0, 0, -s.config.HistoryRetentionDays)
+	return s.dao.CleanupHistory(ctx, before, s.config.RetryMaxAttempts)
 }
 
 func (s *ReminderService) SendOutbox(ctx context.Context) (err error) {
@@ -825,7 +927,12 @@ func (s *ReminderService) SendOutbox(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
+	for i := range rows {
+		if err := ctx.Err(); err != nil {
+			s.releaseClaimedOutbox(ctx, rows[i:])
+			return err
+		}
+		row := rows[i]
 		if err := s.sendOutboxRow(ctx, row); err != nil {
 			s.logger.Warn("library reminder outbox row failed",
 				logger.Int64("outbox_id", row.ID),
@@ -845,6 +952,9 @@ func (s *ReminderService) sendOutboxRow(ctx context.Context, row dao.Notificatio
 	if !s.notificationEnabled(row.Type) {
 		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, dao.SuppressedReasonNotificationTypeDisabled, nil)
 	}
+	if row.ExpiresAt != nil && !row.ExpiresAt.After(s.now()) {
+		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "notification expired", nil)
+	}
 	if s.config.IsDryRun() {
 		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "dry_run", nil)
 	}
@@ -858,6 +968,22 @@ func (s *ReminderService) sendOutboxRow(ctx context.Context, row dao.Notificatio
 	}
 	if !canSend {
 		return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "subscription changed", nil)
+	}
+	if row.Type == NotificationStart30 || row.Type == NotificationEnd10 {
+		reservation, err := s.dao.Reservation(ctx, row.StudentID, row.ExternalReservationID)
+		if err != nil {
+			return err
+		}
+		expectedTarget, expectedExpiry := reservation.StartAt.Add(-30*time.Minute), reservation.StartAt
+		if row.Type == NotificationEnd10 {
+			expectedTarget, expectedExpiry = reservation.EndAt.Add(-10*time.Minute), reservation.EndAt
+		}
+		if row.ExpiresAt == nil || !row.ExpiresAt.Equal(expectedExpiry) || payload.TargetAt != expectedTarget.Unix() {
+			return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "reservation time changed", nil)
+		}
+		if !expectedExpiry.After(s.now()) {
+			return s.dao.FinishOutbox(ctx, row, dao.OutboxSuppressed, "notification expired", nil)
+		}
 	}
 	event := payloadFeedEvent(row.DedupeKey, payload)
 	callCtx, cancel := s.remoteCallContext(ctx)
@@ -888,8 +1014,8 @@ func (s *ReminderService) sendOutboxRow(ctx context.Context, row dao.Notificatio
 	return s.dao.FinishOutbox(ctx, row, dao.OutboxFailed, "transient publish failure", &next)
 }
 
-// 单行处理失败时尽量释放 sending 状态；即使释放也失败，仍继续处理本批其余记录。
-func (s *ReminderService) releaseOutboxAfterFailure(ctx context.Context, row dao.NotificationOutbox) {
+// 单行处理失败时使用独立短上下文释放 sending 状态；即使释放失败，仍继续处理本批其余记录。
+func (s *ReminderService) releaseOutboxAfterFailure(parent context.Context, row dao.NotificationOutbox) {
 	lastError := "transient processing failure"
 	var next *time.Time
 	if row.Attempts < s.config.RetryMaxAttempts {
@@ -898,7 +1024,9 @@ func (s *ReminderService) releaseOutboxAfterFailure(ctx context.Context, row dao
 	} else {
 		lastError = "retry limit reached"
 	}
-	if err := s.dao.FinishOutbox(ctx, row, dao.OutboxFailed, lastError, next); err != nil {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), claimReleaseTimeout)
+	defer cancel()
+	if err := s.dao.FinishOutbox(releaseCtx, row, dao.OutboxFailed, lastError, next); err != nil {
 		s.logger.Warn("library reminder outbox release failed",
 			logger.Int64("outbox_id", row.ID),
 			logger.String("dedupe_key", row.DedupeKey),
@@ -907,11 +1035,22 @@ func (s *ReminderService) releaseOutboxAfterFailure(ctx context.Context, row dao
 	}
 }
 
+func (s *ReminderService) releaseClaimedOutbox(parent context.Context, rows []dao.NotificationOutbox) {
+	if len(rows) == 0 {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), claimReleaseTimeout)
+	defer cancel()
+	if err := s.dao.ReleaseClaimedOutbox(releaseCtx, rows); err != nil {
+		s.logger.Warn("release claimed library reminder outbox failed", logger.Int("count", len(rows)), logger.Error(err))
+	}
+}
+
 func (s *ReminderService) observeWorkMetrics(ctx context.Context) {
 	if s.metrics == nil || s.dao == nil || ctx.Err() != nil {
 		return
 	}
-	snapshot, err := s.dao.MetricsSnapshot(ctx, s.now())
+	snapshot, err := s.dao.MetricsSnapshot(ctx, s.now(), s.config.RetryMaxAttempts)
 	if err != nil {
 		s.logger.Warn("collect library reminder work metrics failed", logger.Error(err))
 		return
@@ -937,9 +1076,9 @@ func (s *ReminderService) observeWorkMetrics(ctx context.Context) {
 	s.metrics.ActiveReservations.Set(float64(snapshot.ActiveUsers))
 }
 
-func (s *ReminderService) scheduleJob(ctx context.Context, sub dao.LibraryReminderSubscription, notificationType, reservationID string, episode int, runAt time.Time, businessVersion int64) error {
+func (s *ReminderService) scheduleJob(ctx context.Context, sub dao.LibraryReminderSubscription, notificationType, reservationID string, episode int, runAt, targetAt time.Time, expiresAt *time.Time, businessVersion int64) error {
 	key := reminderJobKey(sub.StudentID, reservationID, notificationType, businessVersion)
-	return s.dao.UpsertJob(ctx, &dao.NotificationJob{LogicalKey: key, StudentID: sub.StudentID, ExternalReservationID: reservationID, EpisodeVersion: episode, PreferenceVersion: sub.PreferenceVersion, Type: notificationType, RunAt: runAt, Status: dao.JobPending, Version: 1})
+	return s.dao.UpsertJob(ctx, &dao.NotificationJob{LogicalKey: key, StudentID: sub.StudentID, ExternalReservationID: reservationID, EpisodeVersion: episode, PreferenceVersion: sub.PreferenceVersion, Type: notificationType, TargetAt: targetAt, ExpiresAt: expiresAt, RunAt: runAt, Status: dao.JobPending, Version: 1})
 }
 
 func reminderJobKey(studentID, reservationID, notificationType string, businessVersion int64) string {
@@ -982,6 +1121,8 @@ func (s *ReminderService) enqueueFact(ctx context.Context, sub dao.LibraryRemind
 }
 
 func (s *ReminderService) enqueuePayload(ctx context.Context, sub dao.LibraryReminderSubscription, key, notificationType string, payload notificationPayload) error {
+	// 下游通知正文最多使用 8 KiB，入 outbox 前同步截断，避免 JSON 转义后超过 BLOB 上限。
+	payload.Message = truncateUTF8(payload.Message, notificationMessageMaxBytes)
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -1060,7 +1201,7 @@ func (s *ReminderService) forEachSubscription(ctx context.Context, rows []dao.Li
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := s.runUserOperation(ctx, row, fn); err != nil {
+			if err := fn(ctx, row); err != nil {
 				errCh <- err
 			}
 		}()
@@ -1076,7 +1217,15 @@ func (s *ReminderService) forEachSubscription(ctx context.Context, rows []dao.Li
 	return first
 }
 
-func (s *ReminderService) runUserOperation(ctx context.Context, row dao.LibraryReminderSubscription, fn func(context.Context, dao.LibraryReminderSubscription) error) error {
+// runUserOperation 先获取一次用户任务许可，再在许可范围内完成全部重试，
+// 避免首次失败设置的最小间隔将同一次操作的后续重试短路。
+func (s *ReminderService) runUserOperation(ctx context.Context, row dao.LibraryReminderSubscription, taskType string, minInterval time.Duration, fn func(context.Context, dao.LibraryReminderSubscription) error) (err error) {
+	finish, started := s.userTaskGate.start(row.StudentID, taskType, row.PreferenceVersion, s.now(), minInterval)
+	if !started {
+		return nil
+	}
+	defer func() { finish(err == nil, s.now()) }()
+
 	attempts := s.config.UpstreamRetryAttempts
 	if attempts <= 0 {
 		attempts = 1
@@ -1098,18 +1247,15 @@ func (s *ReminderService) runUserOperation(ctx context.Context, row dao.LibraryR
 			case <-timer.C:
 			}
 		}
-		err := fn(ctx, row)
+		err = fn(ctx, row)
 		if err == nil {
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if attempt == attempts-1 {
-			return err
-		}
 	}
-	return nil
+	return err
 }
 
 func terminalReservationStatus(status string) bool {
@@ -1137,7 +1283,7 @@ func payloadFeedEvent(dedupeKey string, payload notificationPayload) *feedv1.Fee
 	case NotificationBreach:
 		content = "检测到新的图书馆违约记录，请查看图书馆规则。"
 	case NotificationBlacklisted:
-		content = truncateUTF8(payload.Message, 8192)
+		content = truncateUTF8(payload.Message, notificationMessageMaxBytes)
 		if content == "" {
 			content = "检测到图书馆预约权限受限，请查看图书馆提示。"
 		}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/asynccnu/ccnubox-be/be-feed/repository/dao"
 	"github.com/asynccnu/ccnubox-be/be-feed/repository/model"
@@ -13,11 +15,13 @@ import (
 )
 
 const (
-	pushDeliveryBatchSize    = 50
-	pushDeliveryMaxAttempts  = 10
-	pushDeliveryMaxBackoff   = time.Second << pushDeliveryMaxAttempts
-	pushDeliveryErrorLimit   = 2048
-	pushDeliveryStateTimeout = 5 * time.Second
+	pushDeliveryBatchSize      = 100
+	pushDeliveryMaxPerDispatch = 2000
+	pushDeliveryMaxConcurrency = 10
+	pushDeliveryMaxAttempts    = 10
+	pushDeliveryMaxBackoff     = time.Second << pushDeliveryMaxAttempts
+	pushDeliveryErrorLimit     = 2048
+	pushDeliveryStateTimeout   = 5 * time.Second
 )
 
 type PushDeliveryService interface {
@@ -52,99 +56,167 @@ func NewPushDeliveryService(deliveryDAO dao.PushDeliveryDAO, gate dao.FeedUserCo
 }
 
 func (s *pushDeliveryService) DispatchDue(ctx context.Context) error {
-	// 定时恢复上一个批次遗留的 sending，避免只能依赖服务重启恢复。
-	// 当前投递任务串行执行，恢复时不会误抢仍在处理的记录。
+	// 定时恢复上一次调用遗留的 sending。控制器不会重叠调用 DispatchDue，
+	// 因此单次调用内部的并发 worker 不会被这里误恢复。
 	if err := s.dao.RecoverSending(ctx); err != nil {
 		return err
 	}
 
-	now := time.Now().Unix()
-	deliveries, err := s.dao.ListDue(ctx, now, pushDeliveryBatchSize)
-	if err != nil {
-		return err
-	}
-	for i := range deliveries {
-		claimed, err := s.dao.Claim(ctx, deliveries[i].ID)
+	processed := 0
+	for processed < pushDeliveryMaxPerDispatch {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		limit := min(pushDeliveryBatchSize, pushDeliveryMaxPerDispatch-processed)
+		deliveries, err := s.dao.ListDue(ctx, time.Now().Unix(), limit)
 		if err != nil {
 			return err
 		}
-		if !claimed {
-			continue
+		if len(deliveries) == 0 {
+			return nil
 		}
-		event, err := s.dao.GetFeedEvent(ctx, deliveries[i].FeedEventID)
-		if errors.Is(err, dao.ErrFeedEventNotFound) {
-			err = s.markSuppressed(ctx, deliveries[i].ID)
+		if err = s.dispatchBatch(ctx, deliveries); err != nil {
+			return err
+		}
+		processed += len(deliveries)
+		if len(deliveries) < limit {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *pushDeliveryService) dispatchBatch(ctx context.Context, deliveries []model.FeedPushDelivery) error {
+	workerCount := min(pushDeliveryMaxConcurrency, len(deliveries))
+	jobs := make(chan model.FeedPushDelivery)
+	errs := make(chan error, len(deliveries)+1)
+	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for delivery := range jobs {
+				if err := s.dispatchOne(ctx, delivery); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+
+sendLoop:
+	for i := range deliveries {
+		select {
+		case jobs <- deliveries[i]:
+		case <-ctx.Done():
+			break sendLoop
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		errs <- err
+	}
+	close(errs)
+
+	var batchErrors []error
+	for err := range errs {
+		batchErrors = append(batchErrors, err)
+	}
+	return errors.Join(batchErrors...)
+}
+
+func (s *pushDeliveryService) dispatchOne(ctx context.Context, delivery model.FeedPushDelivery) error {
+	claimed, err := s.dao.Claim(ctx, delivery.ID)
+	if err != nil || !claimed {
+		return err
+	}
+
+	event, err := s.dao.GetFeedEvent(ctx, delivery.FeedEventID)
+	if errors.Is(err, dao.ErrFeedEventNotFound) {
+		err = s.markSuppressed(ctx, delivery.ID)
+		if err == nil {
+			if s.metrics != nil {
+				s.metrics.PushDeliveryTotal.WithLabelValues("suppressed_missing_event").Inc()
+			}
+			return nil
+		}
+	}
+	if err == nil && strings.EqualFold(event.Type, "library") && s.gate != nil {
+		enabled, gateErr := s.gate.IsLibraryEnabled(ctx, event.StudentId)
+		if gateErr != nil {
+			err = gateErr
+		} else if !enabled {
+			err = s.markSuppressed(ctx, delivery.ID)
 			if err == nil {
 				if s.metrics != nil {
-					s.metrics.PushDeliveryTotal.WithLabelValues("suppressed_missing_event").Inc()
+					s.metrics.PushDeliveryTotal.WithLabelValues("suppressed_by_allow_list").Inc()
 				}
-				continue
+				return nil
 			}
 		}
-		if err == nil && strings.EqualFold(event.Type, "library") && s.gate != nil {
-			enabled, gateErr := s.gate.IsLibraryEnabled(ctx, event.StudentId)
-			if gateErr != nil {
-				err = gateErr
-			} else if !enabled {
-				err = s.markSuppressed(ctx, deliveries[i].ID)
-				if err == nil {
-					if s.metrics != nil {
-						s.metrics.PushDeliveryTotal.WithLabelValues("suppressed_by_allow_list").Inc()
-					}
-					continue
+	}
+	if err == nil {
+		domainEvent := convFeedEventsFromModelToDomain([]model.FeedEvent{*event})[0]
+		prepared, prepareErr := s.push.PreparePush(ctx, &domainEvent)
+		err = prepareErr
+		if err == nil && prepared == nil {
+			err = s.markSuppressed(ctx, delivery.ID)
+			if err == nil {
+				if s.metrics != nil {
+					s.metrics.PushDeliveryTotal.WithLabelValues("suppressed_no_target_or_disabled").Inc()
 				}
+				return nil
 			}
 		}
 		if err == nil {
-			domainEvent := convFeedEventsFromModelToDomain([]model.FeedEvent{*event})[0]
-			cid := deliveries[i].CID
+			cid := delivery.CID
 			if cid == "" {
-				cid, err = s.push.GetPushCID()
+				cid, err = s.push.GetPushCID(ctx)
 				if err == nil {
-					err = s.saveCID(ctx, deliveries[i].ID, cid)
+					err = s.saveCID(ctx, delivery.ID, cid)
 				}
 			}
 			if err == nil {
 				// 持久化 JPush 签发的 CID，让重试保持幂等。
-				err = s.push.PushMSGWithCID(ctx, &domainEvent, cid)
+				err = s.push.PushPreparedMSGWithCID(ctx, &domainEvent, prepared, cid)
 			}
 		}
-		if err == nil {
-			err = s.markSent(ctx, deliveries[i].ID)
-			if err == nil {
-				if s.metrics != nil {
-					s.metrics.PushDeliveryTotal.WithLabelValues("sent").Inc()
-				}
-				continue
-			}
-		}
-
-		attempts := deliveries[i].Attempts + 1
-		backoff := time.Second << min(attempts, pushDeliveryMaxAttempts)
-		if backoff > pushDeliveryMaxBackoff {
-			backoff = pushDeliveryMaxBackoff
-		}
-		lastError := boundedPushError(err)
-		failed := attempts >= pushDeliveryMaxAttempts
-		stateCtx, cancel := pushDeliveryStateContext(ctx)
-		markErr := s.dao.MarkRetry(stateCtx, deliveries[i].ID, attempts, time.Now().Add(backoff).Unix(), lastError, failed)
-		cancel()
-		if markErr != nil {
-			return markErr
-		}
-		if s.metrics != nil {
-			result := "retry"
-			if failed {
-				result = "failed"
-			}
-			s.metrics.PushDeliveryTotal.WithLabelValues(result).Inc()
-		}
-		s.log.Warn("push delivery failed",
-			logger.Int64("delivery_id", deliveries[i].ID),
-			logger.Int("attempt", attempts),
-			logger.String("status", map[bool]string{true: "failed", false: "pending"}[failed]),
-			logger.Error(err))
 	}
+	if err == nil {
+		err = s.markSent(ctx, delivery.ID)
+		if err == nil {
+			if s.metrics != nil {
+				s.metrics.PushDeliveryTotal.WithLabelValues("sent").Inc()
+			}
+			return nil
+		}
+	}
+
+	attempts := delivery.Attempts + 1
+	backoff := time.Second << min(attempts, pushDeliveryMaxAttempts)
+	if backoff > pushDeliveryMaxBackoff {
+		backoff = pushDeliveryMaxBackoff
+	}
+	lastError := boundedPushError(err)
+	failed := attempts >= pushDeliveryMaxAttempts
+	stateCtx, cancel := pushDeliveryStateContext(ctx)
+	markErr := s.dao.MarkRetry(stateCtx, delivery.ID, attempts, time.Now().Add(backoff).Unix(), lastError, failed)
+	cancel()
+	if markErr != nil {
+		return markErr
+	}
+	if s.metrics != nil {
+		result := "retry"
+		if failed {
+			result = "failed"
+		}
+		s.metrics.PushDeliveryTotal.WithLabelValues(result).Inc()
+	}
+	s.log.Warn("push delivery failed",
+		logger.Int64("delivery_id", delivery.ID),
+		logger.Int("attempt", attempts),
+		logger.String("status", map[bool]string{true: "failed", false: "pending"}[failed]),
+		logger.Error(err))
 	return nil
 }
 
@@ -177,9 +249,19 @@ func boundedPushError(err error) string {
 	if err == nil {
 		return ""
 	}
-	text := strings.TrimSpace(err.Error())
-	if len(text) > pushDeliveryErrorLimit {
-		return text[:pushDeliveryErrorLimit]
+	// 先替换非法 UTF-8 字节再沿字符边界截断：按字节硬截断可能切开多字节字符，
+	// 非法序列会让 last_error 写入 MySQL 失败，记录卡在 sending 并在恢复后持续阻断后续投递。
+	text := strings.TrimSpace(strings.ToValidUTF8(err.Error(), string(utf8.RuneError)))
+	return truncateUTF8(text, pushDeliveryErrorLimit)
+}
+
+// truncateUTF8 在不超过 limit 字节的前提下沿 UTF-8 字符边界截断。
+func truncateUTF8(text string, limit int) string {
+	if len(text) <= limit {
+		return text
 	}
-	return text
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+	return text[:limit]
 }

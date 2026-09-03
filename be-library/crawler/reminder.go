@@ -21,6 +21,7 @@ import (
 
 	"github.com/asynccnu/ccnubox-be/common/pkg/metricsx"
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -28,7 +29,6 @@ const (
 	reminderHistoryPath = "/jsq/static/frontApi/user/history/%d/%d"
 	reminderCurrentPath = "/jsq/static/frontApi/user/currentUseMake"
 	reminderUserPath    = "/jsq/static/frontApi/user/getUserInfo"
-	reminderBreachPath  = "/jsq/static/frontApi/user/breach/%d/%d"
 	reminderDoorLogPath = "/jsq/static/frontApi/user/doorLog/%s"
 	reminderSysSetPath  = "/jsq/static/public/cg/getSysSet/PC"
 )
@@ -40,7 +40,6 @@ type ReminderCrawler interface {
 	GetRecentHistory(context.Context, string, HistoryWatermark) (HistoryPage, error)
 	GetCurrentReservation(context.Context, string) (*ReminderReservation, error)
 	GetUserState(context.Context, string) (LibraryUserState, error)
-	GetBreaches(context.Context, string, int, int) (BreachPage, error)
 	GetDoorLogs(context.Context, string, string) ([]DoorLog, error)
 }
 
@@ -67,6 +66,47 @@ type ReminderReservation struct {
 	AwayTimeM   int    `json:"awayTimeM"`
 }
 
+// UnmarshalJSON 同时兼容学校预约接口的新旧时间字段，以及数字或字符串状态。
+func (r *ReminderReservation) UnmarshalJSON(raw []byte) error {
+	var data struct {
+		ID           string          `json:"id"`
+		SeatID       string          `json:"seatId"`
+		SeatLabel    string          `json:"seatLabel"`
+		MakeDateStr  string          `json:"makeDateStr"`
+		MakeBegin    json.RawMessage `json:"makeBegin"`
+		MakeBeginStr json.RawMessage `json:"makeBeginStr"`
+		MakeEnd      json.RawMessage `json:"makeEnd"`
+		MakeEndStr   json.RawMessage `json:"makeEndStr"`
+		Status       json.RawMessage `json:"status"`
+		Location     string          `json:"location"`
+		Message      string          `json:"message"`
+		AwayRange    string          `json:"awayRange"`
+		AwayTimeM    int             `json:"awayTimeM"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return err
+	}
+	begin, err := firstMinute(data.MakeBegin, data.MakeBeginStr)
+	if err != nil {
+		return fmt.Errorf("decode reservation begin: %w", err)
+	}
+	end, err := firstMinute(data.MakeEnd, data.MakeEndStr)
+	if err != nil {
+		return fmt.Errorf("decode reservation end: %w", err)
+	}
+	status, err := stringOrNumber(data.Status)
+	if err != nil {
+		return fmt.Errorf("decode reservation status: %w", err)
+	}
+	*r = ReminderReservation{
+		ID: data.ID, SeatID: data.SeatID, SeatLabel: data.SeatLabel,
+		MakeDateStr: data.MakeDateStr, MakeBegin: begin, MakeEnd: end,
+		Status: status, Location: data.Location, Message: data.Message,
+		AwayRange: data.AwayRange, AwayTimeM: data.AwayTimeM,
+	}
+	return nil
+}
+
 func (r ReminderReservation) Times() (time.Time, time.Time, error) {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
@@ -85,6 +125,10 @@ func (r ReminderReservation) Times() (time.Time, time.Time, error) {
 type Minute int
 
 func (m *Minute) UnmarshalJSON(raw []byte) error {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return errors.New("minute is missing")
+	}
 	var number int
 	if err := json.Unmarshal(raw, &number); err == nil {
 		*m = Minute(number)
@@ -106,17 +150,47 @@ func (m *Minute) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+func firstMinute(values ...json.RawMessage) (Minute, error) {
+	for _, raw := range values {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err == nil && strings.TrimSpace(text) == "" {
+			continue
+		}
+		var minute Minute
+		if err := minute.UnmarshalJSON(trimmed); err != nil {
+			return 0, err
+		}
+		return minute, nil
+	}
+	return 0, errors.New("minute is missing")
+}
+
+func stringOrNumber(raw json.RawMessage) (string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err == nil {
+		return text, nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(trimmed, &number); err == nil && number != "" {
+		return number.String(), nil
+	}
+	return "", errors.New("value must be a string or number")
+}
+
 type LibraryUserState struct {
 	BreachNum     int    `json:"breachNum"`
 	ScoreNum      int    `json:"scoreNum"`
 	BlackTime     string `json:"blackTime"`
 	BlackMessage  string `json:"blackMessage"`
 	CycleTimeName string `json:"cycleTimeName"`
-}
-
-type BreachPage struct {
-	Count int               `json:"count"`
-	List  []json.RawMessage `json:"list"`
 }
 
 type DoorLog json.RawMessage
@@ -154,10 +228,17 @@ type ReminderHTTPClient struct {
 	rateMu          sync.Mutex
 	nextRequest     time.Time
 
-	keyMu        sync.Mutex
-	hmacKey      string
-	hmacKeyUntil time.Time
-	metrics      *metricsx.LibraryReminderMetrics
+	keyMu          sync.Mutex
+	keyGroup       singleflight.Group
+	hmacKey        string
+	hmacKeyUntil   time.Time
+	hmacKeyVersion uint64
+	metrics        *metricsx.LibraryReminderMetrics
+}
+
+type hmacKeySnapshot struct {
+	key     string
+	version uint64
 }
 
 func NewReminderCrawler(client *http.Client, requestTimeout time.Duration, historyPageSize, lookbackDays, upstreamQPS int, metricSet ...*metricsx.LibraryReminderMetrics) *ReminderHTTPClient {
@@ -258,26 +339,32 @@ func (c *ReminderHTTPClient) GetUserState(ctx context.Context, token string) (Li
 	if err != nil {
 		return LibraryUserState{}, err
 	}
+	data := bytes.TrimSpace(raw)
+	if len(data) == 0 || data[0] != '{' {
+		return LibraryUserState{}, fmt.Errorf("%w: user state data must be an object", ErrUpstreamStateUnknown)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return LibraryUserState{}, fmt.Errorf("%w: decode user state", ErrUpstreamStateUnknown)
+	}
+	for _, name := range []string{"breachNum", "scoreNum", "blackTime", "blackMessage", "cycleTimeName"} {
+		if _, exists := fields[name]; !exists {
+			return LibraryUserState{}, fmt.Errorf("%w: user state is missing %s", ErrUpstreamStateUnknown, name)
+		}
+	}
+	for _, name := range []string{"breachNum", "scoreNum"} {
+		if bytes.Equal(bytes.TrimSpace(fields[name]), []byte("null")) {
+			return LibraryUserState{}, fmt.Errorf("%w: user state field %s is null", ErrUpstreamStateUnknown, name)
+		}
+	}
 	var state LibraryUserState
-	if err := json.Unmarshal(raw, &state); err != nil {
+	if err := json.Unmarshal(data, &state); err != nil {
 		return LibraryUserState{}, fmt.Errorf("%w: decode user state", ErrUpstreamStateUnknown)
 	}
 	if len(state.CycleTimeName) > 128 || len(state.BlackTime) > 255 || len(state.BlackMessage) > 60<<10 {
 		return LibraryUserState{}, fmt.Errorf("%w: user state fields exceed storage limits", ErrUpstreamStateUnknown)
 	}
 	return state, nil
-}
-
-func (c *ReminderHTTPClient) GetBreaches(ctx context.Context, token string, page, pageSize int) (BreachPage, error) {
-	raw, err := c.request(ctx, token, fmt.Sprintf(reminderBreachPath, page, pageSize))
-	if err != nil {
-		return BreachPage{}, err
-	}
-	var result BreachPage
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return BreachPage{}, fmt.Errorf("%w: decode breach page", ErrUpstreamStateUnknown)
-	}
-	return result, nil
 }
 
 func (c *ReminderHTTPClient) GetDoorLogs(ctx context.Context, token, date string) ([]DoorLog, error) {
@@ -314,7 +401,7 @@ func (c *ReminderHTTPClient) request(parent context.Context, token, path string)
 	if token == "" {
 		return nil, fmt.Errorf("%w: empty token", ErrUpstreamStateUnknown)
 	}
-	key, err := c.signingKey(parent, token, false)
+	key, version, err := c.signingKey(parent, token, false, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -322,12 +409,26 @@ func (c *ReminderHTTPClient) request(parent context.Context, token, path string)
 	if err == nil {
 		return data, nil
 	}
-	// HMAC 密钥过期或轮换与认证拒绝无法区分，因此刷新一次；后续失败仍视为“未知”。
-	key, refreshErr := c.signingKey(parent, token, true)
+	// 仅在明确的 401/403 认证拒绝时刷新 HMAC 重放一次；
+	// 超时、5xx、业务错误直接上抛，避免外层重试放大上游故障流量。
+	if !isAuthRejection(err) {
+		return nil, err
+	}
+	key, _, refreshErr := c.signingKey(parent, token, true, version)
 	if refreshErr != nil {
 		return nil, err
 	}
 	return c.signedRequest(parent, token, key, path)
+}
+
+// isAuthRejection 判断是否为明确的认证/签名拒绝（HTTP 或业务码 401/403）。
+func isAuthRejection(err error) bool {
+	var upstream *upstreamError
+	if !errors.As(err, &upstream) {
+		return false
+	}
+	return upstream.HTTPCode == http.StatusUnauthorized || upstream.HTTPCode == http.StatusForbidden ||
+		upstream.Code == http.StatusUnauthorized || upstream.Code == http.StatusForbidden
 }
 
 func (c *ReminderHTTPClient) signedRequest(parent context.Context, token, key, path string) (json.RawMessage, error) {
@@ -351,12 +452,52 @@ func (c *ReminderHTTPClient) signedRequest(parent context.Context, token, key, p
 	return c.do(req)
 }
 
-func (c *ReminderHTTPClient) signingKey(parent context.Context, token string, force bool) (string, error) {
+func (c *ReminderHTTPClient) signingKey(parent context.Context, token string, force bool, observedVersion uint64) (string, uint64, error) {
+	if cached, ok := c.cachedSigningKey(force, observedVersion); ok {
+		return cached.key, cached.version, nil
+	}
+
+	result := c.keyGroup.DoChan("hmac", func() (any, error) {
+		// 请求进入 singleflight 前缓存可能已由另一个刷新者更新。
+		if cached, ok := c.cachedSigningKey(force, observedVersion); ok {
+			return cached, nil
+		}
+		key, err := c.fetchSigningKey(context.WithoutCancel(parent), token)
+		if err != nil {
+			return hmacKeySnapshot{}, err
+		}
+		c.keyMu.Lock()
+		defer c.keyMu.Unlock()
+		c.hmacKey = key
+		c.hmacKeyUntil = time.Now().Add(10 * time.Minute)
+		c.hmacKeyVersion++
+		return hmacKeySnapshot{key: key, version: c.hmacKeyVersion}, nil
+	})
+	select {
+	case <-parent.Done():
+		return "", 0, parent.Err()
+	case shared := <-result:
+		if shared.Err != nil {
+			return "", 0, shared.Err
+		}
+		key := shared.Val.(hmacKeySnapshot)
+		return key.key, key.version, nil
+	}
+}
+
+func (c *ReminderHTTPClient) cachedSigningKey(force bool, observedVersion uint64) (hmacKeySnapshot, bool) {
 	c.keyMu.Lock()
 	defer c.keyMu.Unlock()
-	if !force && c.hmacKey != "" && time.Now().Before(c.hmacKeyUntil) {
-		return c.hmacKey, nil
+	if c.hmacKey == "" || !time.Now().Before(c.hmacKeyUntil) {
+		return hmacKeySnapshot{}, false
 	}
+	if force && c.hmacKeyVersion == observedVersion {
+		return hmacKeySnapshot{}, false
+	}
+	return hmacKeySnapshot{key: c.hmacKey, version: c.hmacKeyVersion}, true
+}
+
+func (c *ReminderHTTPClient) fetchSigningKey(parent context.Context, token string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, c.requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+reminderSysSetPath, bytes.NewReader([]byte("{}")))
@@ -380,7 +521,6 @@ func (c *ReminderHTTPClient) signingKey(parent context.Context, token string, fo
 	if err != nil || key == "" {
 		return "", fmt.Errorf("%w: decrypt system hmac config", ErrUpstreamStateUnknown)
 	}
-	c.hmacKey, c.hmacKeyUntil = key, time.Now().Add(10*time.Minute)
 	return key, nil
 }
 
@@ -435,8 +575,6 @@ func reminderMetricEndpoint(path string) string {
 		return "current_use_make"
 	case path == reminderUserPath:
 		return "user_info"
-	case strings.HasPrefix(path, "/jsq/static/frontApi/user/breach/"):
-		return "breach"
 	case strings.HasPrefix(path, "/jsq/static/frontApi/user/doorLog/"):
 		return "door_log"
 	case path == reminderSysSetPath:
@@ -452,7 +590,7 @@ func classifyReminderUpstreamError(err error) string {
 	}
 	var upstream *upstreamError
 	if errors.As(err, &upstream) {
-		if upstream.HTTPCode == http.StatusUnauthorized || upstream.HTTPCode == http.StatusForbidden || upstream.Code == http.StatusUnauthorized || upstream.Code == http.StatusForbidden {
+		if isAuthRejection(err) {
 			return "auth_error"
 		}
 		if upstream.HTTPCode != 0 && (upstream.HTTPCode < 200 || upstream.HTTPCode >= 300) {

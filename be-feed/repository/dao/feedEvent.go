@@ -23,7 +23,7 @@ type FeedEventDAO interface {
 	InsertFeedEventListByTx(ctx context.Context, tx *gorm.DB, events []model.FeedEvent) ([]model.FeedEvent, error)
 	BeginTx(ctx context.Context) (*gorm.DB, error)
 	MarkFeedEventRead(ctx context.Context, studentID string, id int64) error
-	DedupeKeyExists(ctx context.Context, dedupeKey string) (bool, error)
+	DedupeKeyExists(ctx context.Context, studentID, dedupeKey string) (bool, error)
 	StoreFeedEvents(ctx context.Context, events []model.FeedEvent) (inserted []model.FeedEvent, suppressed int, err error)
 }
 
@@ -82,14 +82,13 @@ func (dao *feedEventDAO) MarkFeedEventRead(ctx context.Context, studentID string
 	return nil
 }
 
-func (dao *feedEventDAO) DedupeKeyExists(ctx context.Context, dedupeKey string) (bool, error) {
-	if dedupeKey == "" {
+func (dao *feedEventDAO) DedupeKeyExists(ctx context.Context, studentID, dedupeKey string) (bool, error) {
+	if studentID == "" || dedupeKey == "" {
 		return false, nil
 	}
 	var count int64
 	err := dao.gorm.WithContext(ctx).Unscoped().Model(&model.FeedEvent{}).
-		Where("dedupe_key = ?", dedupeKey).
-		Limit(1).
+		Where("student_id = ? AND dedupe_key = ?", studentID, dedupeKey).
 		Count(&count).Error
 	if err != nil {
 		return false, errorx.Errorf("dao: check feed dedupe key failed, err: %w", err)
@@ -122,7 +121,7 @@ func (dao *feedEventDAO) StoreFeedEvents(ctx context.Context, events []model.Fee
 			}
 
 			result := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "dedupe_key"}},
+				Columns:   []clause.Column{{Name: "student_id"}, {Name: "dedupe_key"}},
 				DoNothing: true,
 			}).Create(&event)
 			if result.Error != nil {
@@ -135,6 +134,7 @@ func (dao *feedEventDAO) StoreFeedEvents(ctx context.Context, events []model.Fee
 				FeedEventID:   event.ID,
 				StudentId:     event.StudentId,
 				Status:        model.PushDeliveryPending,
+				Priority:      pushDeliveryPriority(event),
 				NextAttemptAt: time.Now().Unix(),
 			}
 			if err := tx.Create(&delivery).Error; err != nil {
@@ -148,6 +148,19 @@ func (dao *feedEventDAO) StoreFeedEvents(ctx context.Context, events []model.Fee
 		return nil, 0, errorx.Errorf("dao: store feed events transaction failed, err: %w", err)
 	}
 	return inserted, suppressed, nil
+}
+
+// 时效提醒优先于普通广播投递，避免全量消息占满先进先出队列。
+func pushDeliveryPriority(event model.FeedEvent) int {
+	if !strings.EqualFold(event.Type, "library") {
+		return 0
+	}
+	switch strings.ToUpper(strings.TrimSpace(event.ExtendFields["notification_type"])) {
+	case "START_30", "END_10", "AWAY_60", "AWAY_80":
+		return 100
+	default:
+		return 0
+	}
 }
 
 func (dao *feedEventDAO) RemoveFeedEvent(ctx context.Context, studentId string, id int64, status string) error {

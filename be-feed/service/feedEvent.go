@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"strings"
 
 	"github.com/asynccnu/ccnubox-be/be-feed/domain"
 	"github.com/asynccnu/ccnubox-be/be-feed/events/producer"
@@ -115,6 +118,11 @@ func (s *feedEventService) ClearFeedEvent(ctx context.Context, studentId string,
 }
 
 func (s *feedEventService) InsertEventList(ctx context.Context, feedEvents []domain.FeedEvent) error {
+	for i := range feedEvents {
+		if err := domain.ValidateFeedEventForStorage(feedEvents[i]); err != nil {
+			return err
+		}
+	}
 	_, _, err := s.feedEventDAO.StoreFeedEvents(ctx, convFeedEventsFromDomainToModel(feedEvents))
 	if err != nil {
 		return errorx.Errorf("service: store feed event batch failed: %w", err)
@@ -124,6 +132,13 @@ func (s *feedEventService) InsertEventList(ctx context.Context, feedEvents []dom
 
 func (s *feedEventService) PublicFeedEvent(ctx context.Context, isAll bool, event domain.FeedEvent) (feedv1.PublishStatus, error) {
 	l := s.l.WithContext(ctx)
+	if strings.TrimSpace(event.DedupeKey) == "" {
+		dedupeKey, err := newFeedEventDedupeKey()
+		if err != nil {
+			return feedv1.PublishStatus_ACCEPTED, PUBLIC_FEED_EVENT_ERROR(err)
+		}
+		event.DedupeKey = dedupeKey
+	}
 	if event.Type == "library" {
 		enabled, err := s.feedUserConfigDAO.IsLibraryEnabled(ctx, event.StudentId)
 		if err != nil {
@@ -132,7 +147,7 @@ func (s *feedEventService) PublicFeedEvent(ctx context.Context, isAll bool, even
 		if !enabled {
 			return feedv1.PublishStatus_SUPPRESSED_BY_ALLOW_LIST, nil
 		}
-		duplicate, err := s.feedEventDAO.DedupeKeyExists(ctx, event.DedupeKey)
+		duplicate, err := s.feedEventDAO.DedupeKeyExists(ctx, event.StudentId, event.DedupeKey)
 		if err != nil {
 			return feedv1.PublishStatus_ACCEPTED, PUBLIC_FEED_EVENT_ERROR(err)
 		}
@@ -175,4 +190,12 @@ func (s *feedEventService) PublicFeedEvent(ctx context.Context, isAll bool, even
 		return feedv1.PublishStatus_ACCEPTED, PUBLIC_FEED_EVENT_ERROR(errorx.Errorf("service: send single message failed, studentId: %s, err: %w", event.StudentId, err))
 	}
 	return feedv1.PublishStatus_ACCEPTED, nil
+}
+
+func newFeedEventDedupeKey() (string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", errorx.Errorf("service: generate feed event id failed: %w", err)
+	}
+	return "message:" + hex.EncodeToString(random[:]), nil
 }
