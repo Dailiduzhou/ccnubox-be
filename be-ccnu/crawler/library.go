@@ -37,7 +37,11 @@ type Library struct {
 	Secret string
 }
 
-const seatHMACRequestTimeout = 5 * time.Second
+const (
+	seatHMACRequestTimeout = 5 * time.Second
+	seatDynamicKeyTTL      = 10 * time.Minute
+	seatFallbackKeyTTL     = 30 * time.Second
+)
 
 var seatHMACCache struct {
 	sync.RWMutex
@@ -220,13 +224,19 @@ func (c *Library) getSeatHMACKey(ctx context.Context, token string, force bool) 
 		requestCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), seatHMACRequestTimeout)
 		defer cancel()
 		key, err := c.fetchSeatHMACKey(requestCtx, token)
+		ttl := seatDynamicKeyTTL
 		if err != nil {
-			return "", err
+			// 动态配置异常时短暂缓存静态密钥，避免 token 校验反复等待配置接口。
+			if strings.TrimSpace(c.Secret) == "" {
+				return "", err
+			}
+			key = c.Secret
+			ttl = seatFallbackKeyTTL
 		}
 
 		seatHMACCache.Lock()
 		seatHMACCache.key = key
-		seatHMACCache.until = time.Now().Add(10 * time.Minute)
+		seatHMACCache.until = time.Now().Add(ttl)
 		seatHMACCache.Unlock()
 		return key, nil
 	})
