@@ -61,7 +61,8 @@ func NewFeedEventService(
 
 // GetFeedEvents 根据查询条件查找 Feed 事件
 func (s *feedEventService) GetFeedEvents(ctx context.Context, studentId string) (
-	feedEvents []domain.FeedEventVO, fail []domain.FeedEvent, err error) {
+	feedEvents []domain.FeedEventVO, fail []domain.FeedEvent, err error,
+) {
 	l := s.l.WithContext(ctx)
 
 	events, err := s.feedEventDAO.GetFeedEventsByStudentId(ctx, studentId)
@@ -138,7 +139,7 @@ func (s *feedEventService) PublicFeedEvent(ctx context.Context, isAll bool, even
 		}
 		event.DedupeKey = dedupeKey
 	}
-	if event.Type == "library" {
+	if strings.EqualFold(event.Type, "library") {
 		enabled, err := s.feedUserConfigDAO.IsLibraryEnabled(ctx, event.StudentId)
 		if err != nil {
 			return feedv1.PublishStatus_ACCEPTED, PUBLIC_FEED_EVENT_ERROR(errorx.Errorf("service: check library preference failed, sid: %s, err: %w", event.StudentId, err))

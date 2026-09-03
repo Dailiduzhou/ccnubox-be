@@ -18,10 +18,12 @@ import (
 	"github.com/asynccnu/ccnubox-be/be-library/conf"
 	"github.com/asynccnu/ccnubox-be/be-library/crawler"
 	"github.com/asynccnu/ccnubox-be/be-library/repository/dao"
+	"github.com/asynccnu/ccnubox-be/be-library/tool"
 	feedv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/feed/v1"
 	userv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/user/v1"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/asynccnu/ccnubox-be/common/pkg/metricsx"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
@@ -123,16 +125,16 @@ func (g *userTaskGate) start(studentID, taskType string, preferenceVersion int64
 }
 
 type ReminderService struct {
-	dao          *dao.ReminderDAO
-	crawler      crawler.ReminderCrawler
-	user         userv1.UserServiceClient
-	feed         FeedGateway
-	config       conf.LibraryReminderConf
-	logger       logger.Logger
-	metrics      *metricsx.LibraryReminderMetrics
-	now          func() time.Time
-	preferenceMu *sync.Mutex
-	userTaskGate *userTaskGate
+	dao            *dao.ReminderDAO
+	crawler        crawler.ReminderCrawler
+	user           userv1.UserServiceClient
+	feed           FeedGateway
+	config         conf.LibraryReminderConf
+	logger         logger.Logger
+	metrics        *metricsx.LibraryReminderMetrics
+	now            func() time.Time
+	preferenceLock *semaphore.Weighted
+	userTaskGate   *userTaskGate
 }
 
 func NewReminderService(repo *dao.ReminderDAO, reminderCrawler crawler.ReminderCrawler, user userv1.UserServiceClient, feed FeedGateway, serverConf *conf.ServerConf, metricSet *metricsx.Metrics, l logger.Logger) *ReminderService {
@@ -140,7 +142,7 @@ func NewReminderService(repo *dao.ReminderDAO, reminderCrawler crawler.ReminderC
 	if metricSet != nil {
 		reminderMetrics = metricSet.Library
 	}
-	return &ReminderService{dao: repo, crawler: reminderCrawler, user: user, feed: feed, config: serverConf.Reminder(), logger: l, metrics: reminderMetrics, now: time.Now, preferenceMu: &sync.Mutex{}, userTaskGate: newUserTaskGate()}
+	return &ReminderService{dao: repo, crawler: reminderCrawler, user: user, feed: feed, config: serverConf.Reminder(), logger: l, metrics: reminderMetrics, now: time.Now, preferenceLock: semaphore.NewWeighted(1), userTaskGate: newUserTaskGate()}
 }
 
 func (s *ReminderService) Enabled() bool { return s.config.Enabled }
@@ -168,8 +170,10 @@ func (s *ReminderService) SyncPreferences(ctx context.Context) (err error) {
 		}
 		s.metrics.PreferenceSyncTotal.WithLabelValues(result).Inc()
 	}()
-	s.preferenceMu.Lock()
-	defer s.preferenceMu.Unlock()
+	if err := s.preferenceLock.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer s.preferenceLock.Release(1)
 	return s.syncPreferences(ctx)
 }
 
@@ -268,8 +272,10 @@ func (s *ReminderService) CalibratePreferences(ctx context.Context) error {
 	if !s.Enabled() {
 		return nil
 	}
-	s.preferenceMu.Lock()
-	defer s.preferenceMu.Unlock()
+	if err := s.preferenceLock.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer s.preferenceLock.Release(1)
 	all, _, err := s.loadReminderUsers(ctx)
 	if err != nil {
 		return err
@@ -356,7 +362,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	}
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
-		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, libraryTokenFailureStatus(err))
+		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, libraryTokenFailureStatus(err))
 		return err
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
@@ -364,7 +370,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	}
 	today, err := s.crawler.GetTodayReservations(ctx, token)
 	if err != nil {
-		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
+		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
 		return err
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
@@ -376,7 +382,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	}
 	history, err := s.crawler.GetRecentHistory(ctx, token, crawler.HistoryWatermark{ReservationID: watermark})
 	if err != nil {
-		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
+		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
 		return err
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
@@ -384,7 +390,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	}
 	state, err := s.crawler.GetUserState(ctx, token)
 	if err != nil {
-		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, dao.SubscriptionAuthUpstreamUnknown)
+		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
 		return err
 	}
 	// 部分历史分页可安全用于更新插入和新增事实，但不能据此执行“缺失即取消”的状态转换。
@@ -690,10 +696,7 @@ func awayMinutesFromRange(awayRange, makeDate string, observedAt time.Time) (int
 	if err != nil || minute < 0 || minute > 59 {
 		return 0, false
 	}
-	loc, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		loc = observedAt.Location()
-	}
+	loc := tool.GetLocation()
 	observed := observedAt.In(loc)
 	day := time.Date(observed.Year(), observed.Month(), observed.Day(), 0, 0, 0, 0, loc)
 	if strings.TrimSpace(makeDate) != "" {

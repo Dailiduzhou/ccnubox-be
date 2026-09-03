@@ -77,7 +77,17 @@ func (dao *feedEventDAO) MarkFeedEventRead(ctx context.Context, studentID string
 		return errorx.Errorf("dao: mark feed event read failed, sid: %s, id: %d, err: %w", studentID, id, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		var count int64
+		err := dao.gorm.WithContext(ctx).
+			Model(&model.FeedEvent{}).
+			Where("id = ? AND student_id = ?", id, studentID).
+			Count(&count).Error
+		if err != nil {
+			return errorx.Errorf("dao: check feed event after marking read failed, sid: %s, id: %d, err: %w", studentID, id, err)
+		}
+		if count == 0 {
+			return gorm.ErrRecordNotFound
+		}
 	}
 	return nil
 }
