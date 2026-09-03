@@ -64,11 +64,10 @@ func (app App) Run() {
 func (app App) close() error {
 	var results []error
 	if app.reminder != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := app.reminder.Stop(ctx); err != nil {
-			results = append(results, fmt.Errorf("reminder shutdown error: %w", err))
+		// 必须等待调度任务全部退出，之后才能关闭其仍可能访问的 DAO 和客户端。
+		if err := app.reminder.Stop(context.Background()); err != nil {
+			return fmt.Errorf("reminder shutdown error: %w", err)
 		}
-		cancel()
 	}
 	if app.metrics != nil {
 		if err := app.metrics.Close(); err != nil {
