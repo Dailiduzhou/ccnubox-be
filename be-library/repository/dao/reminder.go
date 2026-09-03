@@ -37,11 +37,33 @@ func NewReminderDAO(db *gorm.DB) *ReminderDAO { return &ReminderDAO{db: db} }
 
 // RecoverOrphanedWork 在单实例启动时恢复上次进程中断留下的处理中任务。
 func (d *ReminderDAO) RecoverOrphanedWork(ctx context.Context) error {
+	return d.recoverClaimedWork(ctx, nil)
+}
+
+// RecoverStaleWork 周期性恢复超过 claim 时限的处理中任务。
+func (d *ReminderDAO) RecoverStaleWork(ctx context.Context, before time.Time) error {
+	return d.recoverClaimedWork(ctx, &before)
+}
+
+func (d *ReminderDAO) recoverClaimedWork(ctx context.Context, before *time.Time) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&NotificationJob{}).Where("status = ?", JobRunning).Update("status", JobPending).Error; err != nil {
+		jobs := tx.Model(&NotificationJob{}).Where("status = ?", JobRunning)
+		if before != nil {
+			jobs = jobs.Where("updated_at < ?", *before)
+		}
+		if err := jobs.Updates(map[string]any{
+			"status":   JobPending,
+			"attempts": gorm.Expr("CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END"),
+			"version":  gorm.Expr("version + 1"),
+		}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&NotificationOutbox{}).Where("status = ?", OutboxSending).Update("status", OutboxPending).Error
+		outbox := tx.Model(&NotificationOutbox{}).Where("status = ?", OutboxSending)
+		if before != nil {
+			outbox = outbox.Where("updated_at < ?", *before)
+		}
+		// sending 可能已完成远程投递，不撤销 attempts；Feed 的去重键保证重试安全。
+		return outbox.Updates(map[string]any{"status": OutboxFailed, "last_error": "sending claim timed out"}).Error
 	})
 }
 
@@ -222,7 +244,7 @@ func (d *ReminderDAO) ActiveSubscriptions(ctx context.Context, now time.Time, li
 	return rows, err
 }
 
-func (d *ReminderDAO) MetricsSnapshot(ctx context.Context, now time.Time) (ReminderMetricsSnapshot, error) {
+func (d *ReminderDAO) MetricsSnapshot(ctx context.Context, now time.Time, maxAttempts int) (ReminderMetricsSnapshot, error) {
 	var snapshot ReminderMetricsSnapshot
 	if err := d.db.WithContext(ctx).Model(&NotificationJob{}).
 		Select("type, status, COUNT(*) AS count").Group("type, status").Scan(&snapshot.Jobs).Error; err != nil {
@@ -242,7 +264,8 @@ func (d *ReminderDAO) MetricsSnapshot(ctx context.Context, now time.Time) (Remin
 		snapshot.OldestDueJobAt = &runAt
 	}
 	var oldestOutbox NotificationOutbox
-	err = d.db.WithContext(ctx).Where("status IN ?", []string{OutboxPending, OutboxSending, OutboxFailed}).Order("created_at ASC, id ASC").First(&oldestOutbox).Error
+	// 与 ClaimOutbox 的领取条件保持一致，只统计仍可被领取的记录，避免已耗尽重试的 failed 记录永久抬高指标。
+	err = d.db.WithContext(ctx).Where("status IN ? AND next_attempt_at <= ? AND attempts < ?", []string{OutboxPending, OutboxFailed}, now, maxAttempts).Order("created_at ASC, id ASC").First(&oldestOutbox).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return snapshot, err
 	}
@@ -255,6 +278,37 @@ func (d *ReminderDAO) MetricsSnapshot(ctx context.Context, now time.Time) (Remin
 		return snapshot, err
 	}
 	return snapshot, nil
+}
+
+const historyCleanupBatchSize = 500
+
+// CleanupHistory 分批删除超过保留期的终态任务与 outbox 记录，避免历史表无限增长拖慢周期聚合和投递。
+// failed 且已耗尽重试的 outbox 记录同样视为终态一并清理。
+func (d *ReminderDAO) CleanupHistory(ctx context.Context, before time.Time, maxAttempts int) error {
+	for {
+		result := d.db.WithContext(ctx).
+			Where("status IN ? AND updated_at < ?", []string{JobDone, JobCancelled, JobSuppressed}, before).
+			Limit(historyCleanupBatchSize).Delete(&NotificationJob{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected < historyCleanupBatchSize {
+			break
+		}
+	}
+	for {
+		result := d.db.WithContext(ctx).
+			Where("(status IN ? OR (status = ? AND attempts >= ?)) AND updated_at < ?",
+				[]string{OutboxSent, OutboxSuppressed}, OutboxFailed, maxAttempts, before).
+			Limit(historyCleanupBatchSize).Delete(&NotificationOutbox{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected < historyCleanupBatchSize {
+			break
+		}
+	}
+	return nil
 }
 
 func (d *ReminderDAO) Subscription(ctx context.Context, studentID string) (*LibraryReminderSubscription, error) {
@@ -348,6 +402,20 @@ func (d *ReminderDAO) SaveUserState(ctx context.Context, row *LibraryUserStateSn
 	return &previous, nil
 }
 
+// AdvanceBlacklistEpisode 为一次新进入黑名单分配持久化版本，作为消息型事件的去重依据。
+func (d *ReminderDAO) AdvanceBlacklistEpisode(ctx context.Context, studentID string, previous int) (int, error) {
+	result := d.db.WithContext(ctx).Model(&LibraryUserStateSnapshot{}).
+		Where("student_id = ? AND blacklist_episode = ?", studentID, previous).
+		Update("blacklist_episode", previous+1)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return 0, gorm.ErrRecordNotFound
+	}
+	return previous + 1, nil
+}
+
 func (d *ReminderDAO) UpsertJob(ctx context.Context, row *NotificationJob) error {
 	if row.Status == "" {
 		row.Status = JobPending
@@ -367,6 +435,12 @@ func (d *ReminderDAO) UpsertJob(ctx context.Context, row *NotificationJob) error
 		if current.Status == JobDone || current.Status == JobRunning {
 			return nil
 		}
+		// 自动迁移后的旧任务没有不可变目标时间；刷新时就地补齐，不改变其领取时间。
+		missingTarget := current.TargetAt.IsZero() && !row.TargetAt.IsZero()
+		missingExpiry := current.ExpiresAt == nil && row.ExpiresAt != nil
+		if current.Status == JobPending && (missingTarget || missingExpiry) {
+			return tx.Model(&current).Updates(map[string]any{"target_at": row.TargetAt, "expires_at": row.ExpiresAt}).Error
+		}
 		// 已执行过的 pending 任务可能由 dispatchJob 重排到未来，不能被扫描任务拉回原始时间。
 		if current.Status == JobPending && (current.Attempts > 0 || !row.RunAt.Before(current.RunAt)) {
 			return nil
@@ -374,7 +448,7 @@ func (d *ReminderDAO) UpsertJob(ctx context.Context, row *NotificationJob) error
 		if current.Status == JobSuppressed && current.PreferenceVersion == row.PreferenceVersion && current.LastError != SuppressedReasonFeatureDisabled && current.LastError != SuppressedReasonNotificationTypeDisabled {
 			return nil
 		}
-		return tx.Model(&current).Updates(map[string]any{"run_at": row.RunAt, "status": JobPending, "preference_version": row.PreferenceVersion, "episode_version": row.EpisodeVersion, "version": gorm.Expr("version + 1"), "last_error": ""}).Error
+		return tx.Model(&current).Updates(map[string]any{"target_at": row.TargetAt, "expires_at": row.ExpiresAt, "run_at": row.RunAt, "status": JobPending, "preference_version": row.PreferenceVersion, "episode_version": row.EpisodeVersion, "version": gorm.Expr("version + 1"), "last_error": ""}).Error
 	})
 }
 
@@ -438,8 +512,16 @@ func (d *ReminderDAO) EnqueueOutbox(ctx context.Context, row *NotificationOutbox
 }
 
 func (d *ReminderDAO) ClaimDueJobs(ctx context.Context, now time.Time, limit int) ([]NotificationJob, error) {
+	currentSubscription := d.db.Model(&LibraryReminderSubscription{}).Select("1").
+		Where("student_id = notification_jobs.student_id AND enabled = ? AND preference_version = notification_jobs.preference_version", true)
+	if err := d.db.WithContext(ctx).Model(&NotificationJob{}).
+		Where("status = ? AND NOT EXISTS (?)", JobPending, currentSubscription).
+		Updates(map[string]any{"status": JobSuppressed, "last_error": "subscription changed"}).Error; err != nil {
+		return nil, err
+	}
 	var candidates []NotificationJob
-	if err := d.db.WithContext(ctx).Where("status = ? AND run_at <= ?", JobPending, now).Order("run_at ASC, id ASC").Limit(limit).Find(&candidates).Error; err != nil {
+	if err := d.db.WithContext(ctx).Where("status = ? AND run_at <= ? AND EXISTS (?)", JobPending, now, currentSubscription).
+		Order("run_at ASC, id ASC").Limit(limit).Find(&candidates).Error; err != nil {
 		return nil, err
 	}
 	claimed := make([]NotificationJob, 0, len(candidates))
@@ -447,16 +529,40 @@ func (d *ReminderDAO) ClaimDueJobs(ctx context.Context, now time.Time, limit int
 		result := d.db.WithContext(ctx).Model(&NotificationJob{}).
 			Where("id = ? AND status = ? AND version = ? AND EXISTS (?)", job.ID, JobPending, job.Version,
 				d.db.Model(&LibraryReminderSubscription{}).Select("1").Where("student_id = notification_jobs.student_id AND enabled = ? AND preference_version = notification_jobs.preference_version", true)).
-			Updates(map[string]any{"status": JobRunning, "attempts": gorm.Expr("attempts + 1")})
+			Updates(map[string]any{"status": JobRunning, "attempts": gorm.Expr("attempts + 1"), "version": gorm.Expr("version + 1")})
 		if result.Error != nil {
-			return nil, result.Error
+			// 更新结果可能不明确，使用预期的新 claim 版本执行幂等释放。
+			job.Status, job.Attempts, job.Version = JobRunning, job.Attempts+1, job.Version+1
+			return append(claimed, job), result.Error
 		}
 		if result.RowsAffected == 1 {
-			job.Status, job.Attempts = JobRunning, job.Attempts+1
+			job.Status, job.Attempts, job.Version = JobRunning, job.Attempts+1, job.Version+1
 			claimed = append(claimed, job)
 		}
 	}
 	return claimed, nil
+}
+
+// ReleaseClaimedJobs 将本批尚未完成的任务重新置为待处理。
+// 未实际执行完的 claim 不计入重试次数，后续调度可立即重新认领。
+func (d *ReminderDAO) ReleaseClaimedJobs(ctx context.Context, jobs []NotificationJob) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, job := range jobs {
+			if err := tx.Model(&NotificationJob{}).
+				Where("id = ? AND status = ? AND version = ?", job.ID, JobRunning, job.Version).
+				Updates(map[string]any{
+					"status":   JobPending,
+					"attempts": gorm.Expr("CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END"),
+					"version":  gorm.Expr("version + 1"),
+				}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (d *ReminderDAO) CompleteJobAndEnqueue(ctx context.Context, job NotificationJob, outbox *NotificationOutbox) error {
@@ -486,22 +592,49 @@ func (d *ReminderDAO) ClaimOutbox(ctx context.Context, now time.Time, limit, max
 	if err := d.db.WithContext(ctx).Model(&NotificationOutbox{}).Where("status IN ? AND NOT EXISTS (?)", []string{OutboxPending, OutboxFailed}, d.db.Model(&LibraryReminderSubscription{}).Select("1").Where("student_id = notification_outbox.student_id AND enabled = ? AND preference_version = notification_outbox.preference_version", true)).Update("status", OutboxSuppressed).Error; err != nil {
 		return nil, err
 	}
-	var candidates []NotificationOutbox
-	if err := d.db.WithContext(ctx).Where("status IN ? AND next_attempt_at <= ? AND attempts < ?", []string{OutboxPending, OutboxFailed}, now, maxAttempts).Order("next_attempt_at ASC, id ASC").Limit(limit).Find(&candidates).Error; err != nil {
+	var claimed []NotificationOutbox
+	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var candidates []NotificationOutbox
+		if err := tx.Where("status IN ? AND next_attempt_at <= ? AND attempts < ?", []string{OutboxPending, OutboxFailed}, now, maxAttempts).Order("next_attempt_at ASC, id ASC").Limit(limit).Find(&candidates).Error; err != nil {
+			return err
+		}
+		claimed = make([]NotificationOutbox, 0, len(candidates))
+		for _, row := range candidates {
+			result := tx.Model(&NotificationOutbox{}).Where("id = ? AND status IN ? AND attempts < ?", row.ID, []string{OutboxPending, OutboxFailed}, maxAttempts).Updates(map[string]any{"status": OutboxSending, "attempts": gorm.Expr("attempts + 1")})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 1 {
+				row.Status, row.Attempts = OutboxSending, row.Attempts+1
+				claimed = append(claimed, row)
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	claimed := make([]NotificationOutbox, 0, len(candidates))
-	for _, row := range candidates {
-		result := d.db.WithContext(ctx).Model(&NotificationOutbox{}).Where("id = ? AND status IN ? AND attempts < ?", row.ID, []string{OutboxPending, OutboxFailed}, maxAttempts).Updates(map[string]any{"status": OutboxSending, "attempts": gorm.Expr("attempts + 1")})
-		if result.Error != nil {
-			return nil, result.Error
-		}
-		if result.RowsAffected == 1 {
-			row.Status, row.Attempts = OutboxSending, row.Attempts+1
-			claimed = append(claimed, row)
-		}
-	}
 	return claimed, nil
+}
+
+// ReleaseClaimedOutbox 释放本批尚未开始投递的记录，并撤销 claim 预增的次数。
+func (d *ReminderDAO) ReleaseClaimedOutbox(ctx context.Context, rows []NotificationOutbox) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, row := range rows {
+			if err := tx.Model(&NotificationOutbox{}).
+				Where("id = ? AND status = ? AND attempts = ?", row.ID, OutboxSending, row.Attempts).
+				Updates(map[string]any{
+					"status":   OutboxPending,
+					"attempts": gorm.Expr("CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END"),
+				}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (d *ReminderDAO) FinishOutbox(ctx context.Context, row NotificationOutbox, status, lastError string, next *time.Time) error {
@@ -513,13 +646,15 @@ func (d *ReminderDAO) FinishOutbox(ctx context.Context, row NotificationOutbox, 
 		now := time.Now()
 		updates["sent_at"] = now
 	}
-	return d.db.WithContext(ctx).Model(&NotificationOutbox{}).Where("id = ? AND status = ?", row.ID, OutboxSending).Updates(updates).Error
+	return d.db.WithContext(ctx).Model(&NotificationOutbox{}).
+		Where("id = ? AND status = ? AND attempts = ?", row.ID, OutboxSending, row.Attempts).
+		Updates(updates).Error
 }
 
 func (d *ReminderDAO) CanSendOutbox(ctx context.Context, row NotificationOutbox) (bool, error) {
 	var count int64
 	err := d.db.WithContext(ctx).Model(&NotificationOutbox{}).
-		Where("id = ? AND status = ? AND EXISTS (?)", row.ID, OutboxSending,
+		Where("id = ? AND status = ? AND attempts = ? AND EXISTS (?)", row.ID, OutboxSending, row.Attempts,
 			d.db.Model(&LibraryReminderSubscription{}).Select("1").Where("student_id = notification_outbox.student_id AND enabled = ? AND preference_version = notification_outbox.preference_version", true)).
 		Count(&count).Error
 	return count == 1, err

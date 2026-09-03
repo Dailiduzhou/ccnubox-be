@@ -36,10 +36,24 @@ func NewFeedUserConfigDAO(db *gorm.DB) FeedUserConfigDAO {
 
 // FindOrCreateUserFeedConfig 查找或创建 FeedUserConfig
 func (dao *feedUserConfigDAO) FindOrCreateUserFeedConfig(ctx context.Context, studentId string) (*model.FeedUserConfig, error) {
-	allowList := model.FeedUserConfig{StudentId: studentId}
-	err := dao.gorm.WithContext(ctx).Model(model.FeedUserConfig{}).
-		Where("student_id = ?", studentId).
-		FirstOrCreate(&allowList).Error
+	var allowList model.FeedUserConfig
+	err := dao.gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("student_id = ?", studentId).
+			First(&allowList).Error
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		allowList = model.FeedUserConfig{
+			StudentId:  studentId,
+			PushConfig: model.DefaultPushConfig,
+		}
+		return createUserFeedConfig(tx, &allowList)
+	})
 	if err != nil {
 		return nil, errorx.Errorf("dao: find or create user feed config failed, sid: %s, err: %w", studentId, err)
 	}
@@ -108,11 +122,18 @@ func (dao *feedUserConfigDAO) ChangeConfigBits(
 ) (*model.FeedUserConfig, error) {
 	var config model.FeedUserConfig
 	err := dao.gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		config = model.FeedUserConfig{StudentId: studentID}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("student_id = ?", studentID).
-			FirstOrCreate(&config).Error; err != nil {
+			First(&config).Error
+		isNew := errors.Is(err, gorm.ErrRecordNotFound)
+		if err != nil && !isNew {
 			return err
+		}
+		if isNew {
+			config = model.FeedUserConfig{
+				StudentId:  studentID,
+				PushConfig: model.DefaultPushConfig,
+			}
 		}
 
 		for position, enabled := range bits {
@@ -134,6 +155,9 @@ func (dao *feedUserConfigDAO) ChangeConfigBits(
 			}
 		}
 
+		if isNew {
+			return createUserFeedConfig(tx, &config)
+		}
 		if libraryChanged {
 			revision, err := allocateLibraryPreferenceRevision(tx)
 			if err != nil {
@@ -155,6 +179,23 @@ func (dao *feedUserConfigDAO) ChangeConfigBits(
 		return nil, errorx.Errorf("dao: change feed config transaction failed, sid: %s, err: %w", studentID, err)
 	}
 	return &config, nil
+}
+
+// 新建配置时同时记录初始图书馆偏好，保证后续增量同步不会遗漏用户。
+func createUserFeedConfig(tx *gorm.DB, config *model.FeedUserConfig) error {
+	revision, err := allocateLibraryPreferenceRevision(tx)
+	if err != nil {
+		return err
+	}
+	config.LibraryRevision = revision
+	if err = tx.Create(config).Error; err != nil {
+		return err
+	}
+	return tx.Create(&model.FeedUserConfigChange{
+		Revision:       revision,
+		StudentId:      config.StudentId,
+		LibraryEnabled: config.PushConfig&(1<<model.LibraryPos) != 0,
+	}).Error
 }
 
 // 分配器行锁会一直持有到事务提交，保证版本号顺序与提交顺序一致。
@@ -197,15 +238,13 @@ func (dao *feedUserConfigDAO) ListLibraryPreferenceChanges(ctx context.Context, 
 
 // 全量分页开始前固定变更水位，水位之后的用户由增量同步重放。
 func (dao *feedUserConfigDAO) LatestLibraryPreferenceRevision(ctx context.Context) (int64, error) {
-	var revision int64
+	var allocator model.FeedUserConfigRevisionAllocator
 	err := dao.gorm.WithContext(ctx).
-		Model(&model.FeedUserConfigChange{}).
-		Select("COALESCE(MAX(revision), 0) AS revision").
-		Scan(&revision).Error
+		First(&allocator, model.FeedUserConfigRevisionAllocatorID).Error
 	if err != nil {
 		return 0, errorx.Errorf("dao: get latest library preference revision failed, err: %w", err)
 	}
-	return revision, nil
+	return allocator.Revision, nil
 }
 
 // 只返回水位内未发生后续变更的用户，避免实时 enabled 集合在翻页期间前移。

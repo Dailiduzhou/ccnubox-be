@@ -74,16 +74,17 @@ type ReservationSnapshot struct {
 func (ReservationSnapshot) TableName() string { return "reservation_snapshots" }
 
 type LibraryUserStateSnapshot struct {
-	ID            int64  `gorm:"primaryKey;autoIncrement"`
-	StudentID     string `gorm:"column:student_id;type:varchar(64);not null;uniqueIndex"`
-	CycleTimeName string `gorm:"type:varchar(128)"`
-	BreachNum     int
-	ScoreNum      int
-	BlackTime     string `gorm:"type:varchar(255)"`
-	BlackMessage  string `gorm:"type:text"`
-	LastSeenAt    time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID               int64  `gorm:"primaryKey;autoIncrement"`
+	StudentID        string `gorm:"column:student_id;type:varchar(64);not null;uniqueIndex"`
+	CycleTimeName    string `gorm:"type:varchar(128)"`
+	BreachNum        int
+	ScoreNum         int
+	BlackTime        string `gorm:"type:varchar(255)"`
+	BlackMessage     string `gorm:"type:text"`
+	BlacklistEpisode int    `gorm:"not null;default:0"`
+	LastSeenAt       time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func (LibraryUserStateSnapshot) TableName() string { return "library_user_state_snapshots" }
@@ -109,12 +110,14 @@ type NotificationJob struct {
 	ExternalReservationID string `gorm:"type:varchar(128)"`
 	EpisodeVersion        int
 	PreferenceVersion     int64
-	Type                  string    `gorm:"type:varchar(64);not null"`
-	RunAt                 time.Time `gorm:"not null;index:idx_job_due,priority:2"`
-	Status                string    `gorm:"type:varchar(16);not null;index:idx_job_due,priority:1;index:idx_job_student_status,priority:2"`
-	Version               int64     `gorm:"not null;default:1"`
-	Attempts              int       `gorm:"not null;default:0"`
-	LastError             string    `gorm:"type:text"`
+	Type                  string     `gorm:"type:varchar(64);not null"`
+	TargetAt              time.Time  `gorm:"index"`
+	ExpiresAt             *time.Time `gorm:"index"`
+	RunAt                 time.Time  `gorm:"not null;index:idx_job_due,priority:2"`
+	Status                string     `gorm:"type:varchar(16);not null;index:idx_job_due,priority:1;index:idx_job_student_status,priority:2"`
+	Version               int64      `gorm:"not null;default:1"`
+	Attempts              int        `gorm:"not null;default:0"`
+	LastError             string     `gorm:"type:text"`
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }
@@ -127,12 +130,13 @@ type NotificationOutbox struct {
 	StudentID             string `gorm:"column:student_id;type:varchar(64);not null;index:idx_outbox_student_status,priority:1"`
 	ExternalReservationID string `gorm:"type:varchar(128);index:idx_outbox_reservation"`
 	PreferenceVersion     int64
-	Type                  string    `gorm:"type:varchar(64);not null"`
-	Payload               []byte    `gorm:"type:blob;not null"`
-	Status                string    `gorm:"type:varchar(16);not null;index:idx_outbox_due,priority:1;index:idx_outbox_student_status,priority:2"`
-	Attempts              int       `gorm:"not null;default:0"`
-	NextAttemptAt         time.Time `gorm:"not null;index:idx_outbox_due,priority:2"`
-	LastError             string    `gorm:"type:text"`
+	Type                  string     `gorm:"type:varchar(64);not null"`
+	Payload               []byte     `gorm:"type:blob;not null"`
+	Status                string     `gorm:"type:varchar(16);not null;index:idx_outbox_due,priority:1;index:idx_outbox_student_status,priority:2"`
+	Attempts              int        `gorm:"not null;default:0"`
+	NextAttemptAt         time.Time  `gorm:"not null;index:idx_outbox_due,priority:2"`
+	ExpiresAt             *time.Time `gorm:"index"`
+	LastError             string     `gorm:"type:text"`
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 	SentAt                *time.Time
