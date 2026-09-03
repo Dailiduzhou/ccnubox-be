@@ -6,9 +6,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asynccnu/ccnubox-be/be-library/tool"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/robfig/cron/v3"
 )
+
+const reminderTaskTimeout = 25 * time.Minute
 
 type ReminderScheduler struct {
 	service *ReminderService
@@ -31,10 +34,7 @@ func (l reminderCronLogger) Error(err error, msg string, keysAndValues ...interf
 }
 
 func NewReminderScheduler(service *ReminderService, l logger.Logger) *ReminderScheduler {
-	loc, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		panic(err)
-	}
+	loc := tool.GetLocation()
 	cronLogger := reminderCronLogger{logger: l}
 	c := cron.New(cron.WithLocation(loc), cron.WithChain(cron.Recover(cronLogger), cron.SkipIfStillRunning(cronLogger)))
 	scheduler := &ReminderScheduler{service: service, cron: c, logger: l}
@@ -95,7 +95,7 @@ func (s *ReminderScheduler) startLoop(ctx context.Context, name string, interval
 	go func() {
 		defer s.wg.Done()
 		if immediate {
-			s.runWithContext(ctx, name, fn)
+			s.runTask(ctx, name, fn)
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -104,7 +104,7 @@ func (s *ReminderScheduler) startLoop(ctx context.Context, name string, interval
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runWithContext(ctx, name, fn)
+				s.runTask(ctx, name, fn)
 			}
 		}
 	}()
@@ -118,14 +118,15 @@ func (s *ReminderScheduler) run(name string, fn func(context.Context) error) {
 	if cancel == nil {
 		return
 	}
-	// Cron 不暴露根上下文；为每次操作设置超时上下文，确保关闭时可以等待且不会泄漏上游请求。
-	taskCtx, stop := context.WithTimeout(ctx, 25*time.Minute)
-	defer stop()
-	s.runWithContext(taskCtx, name, fn)
+	s.runTask(ctx, name, fn)
 }
 
-func (s *ReminderScheduler) runWithContext(ctx context.Context, name string, fn func(context.Context) error) {
-	if err := fn(ctx); err != nil && ctx.Err() == nil {
+// runTask 为 cron 和固定间隔任务统一设置单次执行边界。
+// 超时依赖下游遵守 context，无法强制终止忽略取消信号的调用。
+func (s *ReminderScheduler) runTask(parent context.Context, name string, fn func(context.Context) error) {
+	taskCtx, cancel := context.WithTimeout(parent, reminderTaskTimeout)
+	defer cancel()
+	if err := fn(taskCtx); err != nil && parent.Err() == nil {
 		s.logger.Warn("library reminder task failed", logger.String("task", name), logger.Error(err))
 	}
 }
@@ -136,9 +137,9 @@ func (s *ReminderScheduler) Stop(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
+	// 先取消所有任务，但在 cron 与固定间隔 loop 全部退出前保留运行状态；
+	// 若本次等待超时，后续 Stop 仍可继续等待，避免误判为已经安全停止。
 	s.cancel()
-	s.cancel = nil
-	s.rootCtx = nil
 	s.mu.Unlock()
 	cronCtx := s.cron.Stop()
 	done := make(chan struct{})
@@ -152,6 +153,10 @@ func (s *ReminderScheduler) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-done:
-		return nil
 	}
+	s.mu.Lock()
+	s.cancel = nil
+	s.rootCtx = nil
+	s.mu.Unlock()
+	return nil
 }

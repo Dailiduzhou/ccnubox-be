@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/asynccnu/ccnubox-be/be-library/tool"
 	"github.com/asynccnu/ccnubox-be/common/pkg/metricsx"
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
@@ -108,10 +109,10 @@ func (r *ReminderReservation) UnmarshalJSON(raw []byte) error {
 }
 
 func (r ReminderReservation) Times() (time.Time, time.Time, error) {
-	loc, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
+	return r.timesIn(tool.GetLocation())
+}
+
+func (r ReminderReservation) timesIn(loc *time.Location) (time.Time, time.Time, error) {
 	day, err := time.ParseInLocation("2006-01-02", r.MakeDateStr, loc)
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("parse reservation date: %w", err)
@@ -278,7 +279,7 @@ func (c *ReminderHTTPClient) GetTodayReservations(ctx context.Context, token str
 
 func (c *ReminderHTTPClient) GetRecentHistory(ctx context.Context, token string, watermark HistoryWatermark) (HistoryPage, error) {
 	result := HistoryPage{Complete: true}
-	loc, _ := time.LoadLocation("Asia/Shanghai")
+	loc := tool.GetLocation()
 	cutoff := time.Now().In(loc).AddDate(0, 0, -c.historyLookback).Format("2006-01-02")
 	for page := 0; page < c.historyMaxPages; page++ {
 		raw, err := c.request(ctx, token, fmt.Sprintf(reminderHistoryPath, page, c.historyPageSize))
@@ -383,6 +384,7 @@ func (c *ReminderHTTPClient) GetDoorLogs(ctx context.Context, token, date string
 }
 
 func validateReservations(rows []ReminderReservation) error {
+	loc := tool.GetLocation()
 	for _, row := range rows {
 		if strings.TrimSpace(row.ID) == "" || strings.TrimSpace(row.MakeDateStr) == "" {
 			return fmt.Errorf("%w: reservation is missing identity or date", ErrUpstreamStateUnknown)
@@ -390,7 +392,7 @@ func validateReservations(rows []ReminderReservation) error {
 		if len(row.ID) > 128 || len(row.SeatID) > 128 || len(row.SeatLabel) > 128 || len(row.Location) > 512 || len(row.Status) > 128 || len(row.MakeDateStr) != len("2006-01-02") {
 			return fmt.Errorf("%w: reservation fields exceed storage limits", ErrUpstreamStateUnknown)
 		}
-		if _, _, err := row.Times(); err != nil {
+		if _, _, err := row.timesIn(loc); err != nil {
 			return fmt.Errorf("%w: invalid reservation %s: %v", ErrUpstreamStateUnknown, row.ID, err)
 		}
 	}

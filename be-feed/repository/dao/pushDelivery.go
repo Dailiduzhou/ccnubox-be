@@ -13,7 +13,7 @@ import (
 var ErrFeedEventNotFound = errors.New("feed event not found")
 
 type PushDeliveryDAO interface {
-	RecoverSending(ctx context.Context) error
+	RecoverSending(ctx context.Context, before int64) error
 	ListDue(ctx context.Context, now int64, limit int) ([]model.FeedPushDelivery, error)
 	Claim(ctx context.Context, id int64) (bool, error)
 	GetFeedEvent(ctx context.Context, id int64) (*model.FeedEvent, error)
@@ -31,9 +31,11 @@ func NewPushDeliveryDAO(db *gorm.DB) PushDeliveryDAO {
 	return &pushDeliveryDAO{db: db}
 }
 
-func (d *pushDeliveryDAO) RecoverSending(ctx context.Context) error {
+// RecoverSending 只恢复 updated_at 早于 before 的 sending 记录，
+// 避免把仍在推送中的记录误重置为 pending 导致重复投递。
+func (d *pushDeliveryDAO) RecoverSending(ctx context.Context, before int64) error {
 	if err := d.db.WithContext(ctx).Model(&model.FeedPushDelivery{}).
-		Where("status = ?", model.PushDeliverySending).
+		Where("status = ? AND updated_at < ?", model.PushDeliverySending, before).
 		Update("status", model.PushDeliveryPending).Error; err != nil {
 		return errorx.Errorf("dao: recover sending push deliveries failed: %w", err)
 	}

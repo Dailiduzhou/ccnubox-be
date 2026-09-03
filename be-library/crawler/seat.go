@@ -300,7 +300,7 @@ func (c *Crawler) GetSeatInfos(ctx context.Context, token string, roomIDs []stri
 }
 
 func defaultSeatQuery(now time.Time) (string, getSeatInfoReq) {
-	loc, _ := tool.GetLocation()
+	loc := tool.GetLocation()
 	now = now.In(loc)
 	if now.Hour() >= 22 {
 		return now.AddDate(0, 0, 1).Format("2006-01-02"), getSeatInfoReq{
@@ -343,7 +343,7 @@ func (c *Crawler) GetSeatInfosForPeriod(ctx context.Context, token string, roomI
 		return nil, errorx.Errorf("end time must be after start time")
 	}
 
-	loc, _ := tool.GetLocation()
+	loc := tool.GetLocation()
 	now := time.Now().In(loc)
 	date := now.Format("2006-01-02")
 	if now.Hour() >= 22 {

@@ -96,10 +96,18 @@ func TestPushDeliveryRecoversSendingOnlyAtStartup(t *testing.T) {
 	now := time.Now().Unix()
 	rows := []model.FeedPushDelivery{
 		{FeedEventID: 1, StudentId: "20260001", Status: model.PushDeliveryPending, NextAttemptAt: now},
+		// 回拨 updated_at 到阈值之前以模拟孤儿记录；row3 模拟仍在推送中的活跃记录。
 		{FeedEventID: 2, StudentId: "20260002", Status: model.PushDeliverySending, Attempts: 2, NextAttemptAt: now},
+		{FeedEventID: 3, StudentId: "20260003", Status: model.PushDeliverySending, Attempts: 1, NextAttemptAt: now},
 	}
+	// 回拨 updated_at 到阈值之前以模拟孤儿记录；row3 模拟仍在推送中的活跃记录。
 	if err = db.Create(&rows).Error; err != nil {
 		t.Fatalf("create push deliveries: %v", err)
+	}
+	// GORM 在 Create/Update 时会强制重置 updated_at，故用 UpdateColumn 绕过钩子显式回拨。
+	if err = db.Model(&model.FeedPushDelivery{}).Where("id = ?", rows[1].ID).
+		UpdateColumn("updated_at", now-60).Error; err != nil {
+		t.Fatalf("backdate updated_at: %v", err)
 	}
 
 	due, err := repo.ListDue(ctx, now, 10)
@@ -115,14 +123,21 @@ func TestPushDeliveryRecoversSendingOnlyAtStartup(t *testing.T) {
 		t.Fatalf("claim sending delivery: claimed=%v err=%v", claimed, err)
 	}
 
-	if err = repo.RecoverSending(ctx); err != nil {
+	// 只恢复超过超时阈值的 sending：陈旧记录被恢复，活跃记录不被误重置。
+	if err = repo.RecoverSending(ctx, now); err != nil {
 		t.Fatalf("recover sending deliveries: %v", err)
 	}
 	due, err = repo.ListDue(ctx, now, 10)
-	if err != nil || len(due) != 2 || due[1].Attempts != 2 {
+	if err != nil || len(due) != 1 || due[0].ID != rows[1].ID || due[0].Attempts != 2 {
 		t.Fatalf("due after recovery=%+v err=%v", due, err)
 	}
-	if err = repo.MarkSent(ctx, rows[0].ID); err == nil {
+	var count int64
+	if err = db.Model(&model.FeedPushDelivery{}).
+		Where("id IN ? AND status = ?", []int64{rows[0].ID, rows[2].ID}, model.PushDeliverySending).
+		Count(&count).Error; err != nil || count != 2 {
+		t.Fatalf("active sending should be kept, count=%d err=%v", count, err)
+	}
+	if err = repo.MarkSent(ctx, rows[1].ID); err == nil {
 		t.Fatal("pending delivery was finalized without being claimed")
 	}
 }
