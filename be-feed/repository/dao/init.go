@@ -149,54 +149,57 @@ const initialLibraryPreferenceMigrationBatchSize = 200
 
 // 首次迁移图书馆开关时，将尚无偏好版本的已有用户默认设为开启并记录增量变更。
 func migrateInitialLibraryPreference(db *gorm.DB) error {
-	return db.Transaction(func(tx *gorm.DB) error {
-		var configs []model.FeedUserConfig
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Select("id", "student_id").
-			Where("library_revision = 0").
-			Order("id ASC").
-			Find(&configs).Error; err != nil {
-			return err
-		}
-		if len(configs) == 0 {
-			return nil
-		}
-
-		var allocator model.FeedUserConfigRevisionAllocator
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			First(&allocator, model.FeedUserConfigRevisionAllocatorID).Error; err != nil {
-			return err
-		}
-
-		changes := make([]model.FeedUserConfigChange, len(configs))
-		firstRevision := allocator.Revision + 1
-		for i := range configs {
-			changes[i] = model.FeedUserConfigChange{
-				Revision:       firstRevision + int64(i),
-				StudentId:      configs[i].StudentId,
-				LibraryEnabled: true,
+	var lastID int64
+	for {
+		migrated := 0
+		var batchLastID int64
+		err := db.Transaction(func(tx *gorm.DB) error {
+			var configs []model.FeedUserConfig
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Select("id", "student_id").
+				Where("id > ? AND library_revision = 0", lastID).
+				Order("id ASC").
+				Limit(initialLibraryPreferenceMigrationBatchSize).
+				Find(&configs).Error; err != nil {
+				return err
 			}
-		}
-		allocator.Revision += int64(len(configs))
-		if err := tx.Model(&allocator).UpdateColumn("revision", allocator.Revision).Error; err != nil {
-			return err
-		}
-		if err := tx.CreateInBatches(&changes, initialLibraryPreferenceMigrationBatchSize).Error; err != nil {
-			return err
-		}
+			if len(configs) == 0 {
+				return nil
+			}
+			migrated = len(configs)
+			batchLastID = configs[len(configs)-1].ID
 
-		for start := 0; start < len(configs); start += initialLibraryPreferenceMigrationBatchSize {
-			end := min(start+initialLibraryPreferenceMigrationBatchSize, len(configs))
-			batch := configs[start:end]
-			ids := make([]int64, len(batch))
-			args := make([]any, 0, len(batch)*2)
+			var allocator model.FeedUserConfigRevisionAllocator
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				First(&allocator, model.FeedUserConfigRevisionAllocatorID).Error; err != nil {
+				return err
+			}
+
+			changes := make([]model.FeedUserConfigChange, len(configs))
+			firstRevision := allocator.Revision + 1
+			for i := range configs {
+				changes[i] = model.FeedUserConfigChange{
+					Revision:       firstRevision + int64(i),
+					StudentId:      configs[i].StudentId,
+					LibraryEnabled: true,
+				}
+			}
+			allocator.Revision += int64(len(configs))
+			if err := tx.Model(&allocator).UpdateColumn("revision", allocator.Revision).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(&changes).Error; err != nil {
+				return err
+			}
+
+			ids := make([]int64, len(configs))
+			args := make([]any, 0, len(configs)*2)
 			var revisionCase strings.Builder
 			revisionCase.WriteString("CASE id")
-			for i := range batch {
-				revision := firstRevision + int64(start+i)
+			for i := range configs {
 				revisionCase.WriteString(" WHEN ? THEN ?")
-				args = append(args, batch[i].ID, revision)
-				ids[i] = batch[i].ID
+				args = append(args, configs[i].ID, firstRevision+int64(i))
+				ids[i] = configs[i].ID
 			}
 			revisionCase.WriteString(" ELSE library_revision END")
 
@@ -209,10 +212,17 @@ func migrateInitialLibraryPreference(db *gorm.DB) error {
 			if result.Error != nil {
 				return result.Error
 			}
-			if result.RowsAffected != int64(len(batch)) {
-				return fmt.Errorf("migrate initial library preference: updated %d configs, want %d", result.RowsAffected, len(batch))
+			if result.RowsAffected != int64(len(configs)) {
+				return fmt.Errorf("migrate initial library preference: updated %d configs, want %d", result.RowsAffected, len(configs))
 			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-		return nil
-	})
+		if migrated < initialLibraryPreferenceMigrationBatchSize {
+			return nil
+		}
+		lastID = batchLastID
+	}
 }
