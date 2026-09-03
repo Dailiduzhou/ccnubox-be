@@ -7,7 +7,7 @@ import (
 
 func TestGradeUpdateColumns(t *testing.T) {
 	baseWant := []string{
-		"kc_id", "kcmc", "xnm", "xqm", "xf", "kcxzmc", "kclbmc", "kcbj", "jd", "cj",
+		"kc_id", "kcmc", "xnm", "xqm", "xf", "kcxzmc", "kclbmc", "kcbj", "jd", "cj", "change_version",
 	}
 	base := gradeUpdateColumns(false)
 	if !slices.Equal(base, baseWant) {

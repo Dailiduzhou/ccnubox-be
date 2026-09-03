@@ -93,10 +93,12 @@ func (d *gradeDAO) BatchInsertOrUpdate(ctx context.Context, grades []model.Grade
 	for _, grade := range grades {
 		key := grade.StudentId + grade.JxbId
 		if existing, exists := existingMap[key]; !exists {
+			grade.ChangeVersion = 1
 			toInsert = append(toInsert, grade)
 		} else {
 			// 比对字段是否有变化
 			if !isGradeEqual(existing, grade, ifDetail) {
+				grade.ChangeVersion = existing.ChangeVersion + 1
 				toUpdate = append(toUpdate, grade)
 			}
 		}
@@ -117,13 +119,12 @@ func (d *gradeDAO) BatchInsertOrUpdate(ctx context.Context, grades []model.Grade
 		}
 	}
 
-	affectedGrades = toInsert
-	return affectedGrades, nil
+	return changed, nil
 }
 
 func gradeUpdateColumns(ifDetail bool) []string {
 	columns := []string{
-		"kc_id", "kcmc", "xnm", "xqm", "xf", "kcxzmc", "kclbmc", "kcbj", "jd", "cj",
+		"kc_id", "kcmc", "xnm", "xqm", "xf", "kcxzmc", "kclbmc", "kcbj", "jd", "cj", "change_version",
 	}
 	if ifDetail {
 		columns = append(columns,
