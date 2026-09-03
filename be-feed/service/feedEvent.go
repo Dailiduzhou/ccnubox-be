@@ -78,13 +78,12 @@ func (s *feedEventService) GetFeedEvents(ctx context.Context, studentId string) 
 		return feedEvents, []domain.FeedEvent{}, nil
 	}
 
-	err = s.feedFailEventDAO.DelFeedFailEventsByStudentId(ctx, studentId)
-	if err != nil {
-		l.Warn("service: delete feed fail events ignored", logger.String("studentId", studentId), logger.Error(err))
-		return feedEvents, []domain.FeedEvent{}, nil
-	}
-
 	if len(failEvents) > 0 {
+		err = s.feedFailEventDAO.DelFeedFailEventsByStudentId(ctx, studentId)
+		if err != nil {
+			l.Warn("service: delete feed fail events ignored", logger.String("studentId", studentId), logger.Error(err))
+			return feedEvents, []domain.FeedEvent{}, nil
+		}
 		fail = convFeedFailEventFromModelToDomain(failEvents)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
+	"github.com/asynccnu/ccnubox-be/common/tool"
 )
 
 const (
@@ -49,7 +50,27 @@ func (c *UnderGrad) LoginUnderGradSystem(ctx context.Context) error {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
 		return errorx.Errorf("undergrad: unexpected CAS response status %d", resp.StatusCode)
 	}
+	if err := validateUndergraduateLanding(resp); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func validateUndergraduateLanding(resp *http.Response) error {
+	if resp == nil || resp.Request == nil || resp.Request.URL == nil {
+		return errorx.New("undergrad: CAS response is missing its final URL")
+	}
+
+	host := resp.Request.URL.Hostname()
+	path := strings.TrimRight(resp.Request.URL.Path, "/")
+	if strings.EqualFold(host, "selfservice.ccnu.edu.cn") &&
+		strings.EqualFold(path, "/account/init.jsf") {
+		return errorx.Errorf("undergrad: account initialization required: %w", tool.ErrCCNUAccountInitializationRequired)
+	}
+	if !strings.EqualFold(host, "bkzhjw.ccnu.edu.cn") {
+		return errorx.Errorf("undergrad: CAS authentication did not reach undergraduate system, final host=%s", host)
+	}
 	return nil
 }
 

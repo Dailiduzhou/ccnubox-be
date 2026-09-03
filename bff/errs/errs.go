@@ -7,6 +7,11 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 )
 
+// --- CCNU Account ---
+var (
+	CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR = errorx.FormatErrorFunc(b_errorx.New(http.StatusConflict, CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR_CODE, "请先完成统一身份认证账户信息初始化"))
+)
+
 // --- Banner ---
 var (
 	GET_BANNER_ERROR  = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_BANNER_ERROR_CODE, "获取用banner失败!"))

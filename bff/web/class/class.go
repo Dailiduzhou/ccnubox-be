@@ -9,6 +9,7 @@ import (
 	"github.com/asynccnu/ccnubox-be/bff/web/ijwt"
 	classlistv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/classlist/v1"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
+	"github.com/asynccnu/ccnubox-be/common/tool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -50,6 +51,7 @@ func (c *ClassHandler) RegisterRoutes(s *gin.RouterGroup, authMiddleware gin.Han
 // @Param request query GetClassListRequest true "获取课表请求参数"
 // @Success 200 {object} web.Response{data=GetClassListResp} "成功返回课表"
 // @Failure 401 {object} web.Response "未登录或 token 无效，code=40001"
+// @Failure 409 {object} web.Response "统一身份认证账户尚未初始化，code=40603"
 // @Failure 422 {object} web.Response "请求参数错误，code=40002"
 // @Router /class/get [get]
 func (c *ClassHandler) GetClassList(ctx *gin.Context, req GetClassListRequest, uc ijwt.UserClaims) (web.Response, error) {
@@ -64,7 +66,7 @@ func (c *ClassHandler) GetClassList(ctx *gin.Context, req GetClassListRequest, u
 		Refresh:  *req.Refresh,
 	})
 	if err != nil {
-		return web.Response{}, errs.GET_CLASS_LIST_ERROR(err)
+		return web.Response{}, mapGetClassListError(err)
 	}
 
 	respClasses := make([]*ClassInfo, 0, len(getResp.Classes))
@@ -97,6 +99,13 @@ func (c *ClassHandler) GetClassList(ctx *gin.Context, req GetClassListRequest, u
 		Msg:  "Success",
 		Data: resp,
 	}, nil
+}
+
+func mapGetClassListError(err error) error {
+	if tool.IsCCNUAccountInitializationRequired(err) {
+		return errs.CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR(err)
+	}
+	return errs.GET_CLASS_LIST_ERROR(err)
 }
 
 // AddClass 添加课表

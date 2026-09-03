@@ -8,7 +8,46 @@ import (
 	"github.com/asynccnu/ccnubox-be/bff/errs"
 	b_errorx "github.com/asynccnu/ccnubox-be/bff/pkg/errorx"
 	classlistv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/classlist/v1"
+	"github.com/asynccnu/ccnubox-be/common/tool"
 )
+
+func TestMapGetClassListError(t *testing.T) {
+	tests := []struct {
+		name       string
+		origin     error
+		wantCode   int
+		wantStatus int
+	}{
+		{
+			name:       "account initialization required",
+			origin:     classlistv1.ErrorCCNULoginError(tool.CCNUAccountInitializationRequiredMarker),
+			wantCode:   errs.CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR_CODE,
+			wantStatus: 409,
+		},
+		{
+			name:       "unexpected class error",
+			origin:     errors.New("database unavailable"),
+			wantCode:   errs.GET_CLASS_LIST_ERROR_CODE,
+			wantStatus: 500,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped := mapGetClassListError(tt.origin)
+			var got *b_errorx.CustomError
+			if !errors.As(wrapped, &got) {
+				t.Fatal("wrapped error does not contain a CustomError")
+			}
+			if got.Code != tt.wantCode {
+				t.Errorf("code = %d, want %d", got.Code, tt.wantCode)
+			}
+			if got.HttpCode != tt.wantStatus {
+				t.Errorf("HTTP status = %d, want %d", got.HttpCode, tt.wantStatus)
+			}
+		})
+	}
+}
 
 func TestWrapClassMutationError(t *testing.T) {
 	tests := []struct {
