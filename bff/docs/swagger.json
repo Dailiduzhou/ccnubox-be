@@ -4406,6 +4406,10 @@
                 "holiday": {
                     "type": "boolean"
                 },
+                "library": {
+                    "description": "Library is optional so requests from already deployed clients preserve the user's existing library-reminder preference.",
+                    "type": "boolean"
+                },
                 "muxi": {
                     "type": "boolean"
                 }
@@ -4470,6 +4474,9 @@
                     "type": "boolean"
                 },
                 "holiday": {
+                    "type": "boolean"
+                },
+                "library": {
                     "type": "boolean"
                 },
                 "muxi": {
