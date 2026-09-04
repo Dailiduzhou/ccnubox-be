@@ -284,13 +284,19 @@ func (s *ReminderService) CalibratePreferences(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var baselineErr error
 	if s.config.ShouldBaselineOnEnable() {
 		if err := s.forEachSubscription(ctx, enabled, s.RefreshUser); err != nil {
 			return fmt.Errorf("calibrate baseline batch: %w", err)
 		}
 	}
 	// 释放互斥锁前重放与分页全量查询并发的变更，消除全量快照与增量变更的顺序间隙。
-	return s.syncPreferences(ctx)
+	// baseline 批量失败也必须完成重放，否则快照加载/应用期间的偏好变更（如用户
+	// 禁用提醒）会停留在过期状态，可能让 outbox 循环继续发送本应被抑制的通知。
+	if err := s.syncPreferences(ctx); err != nil {
+		return errors.Join(baselineErr, err)
+	}
+	return baselineErr
 }
 
 func (s *ReminderService) loadReminderUsers(ctx context.Context) ([]dao.PreferenceChange, int64, error) {
@@ -1315,6 +1321,7 @@ func (s *ReminderService) forEachSubscription(ctx context.Context, rows []dao.Li
 	var mu sync.Mutex
 	var launchErr error
 
+launch:
 	for i := range rows {
 		if err := ctx.Err(); err != nil {
 			launchErr = err
@@ -1324,7 +1331,7 @@ func (s *ReminderService) forEachSubscription(ctx context.Context, rows []dao.Li
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			launchErr = ctx.Err()
-			break
+			break launch
 		}
 		row := rows[i]
 		batch.Launched++
