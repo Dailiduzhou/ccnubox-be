@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +10,10 @@ import (
 	"github.com/asynccnu/ccnubox-be/be-library/tool"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/robfig/cron/v3"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const reminderTaskTimeout = 25 * time.Minute
@@ -43,15 +48,17 @@ func NewReminderScheduler(service *ReminderService, l logger.Logger) *ReminderSc
 	}
 	for _, entry := range []struct {
 		spec string
+		name string
 		fn   func(context.Context) error
 	}{
-		{service.config.FullRefreshCron, service.RefreshAll},
-		{service.config.PreferenceFullSyncCron, service.CalibratePreferences},
-		{service.config.ActiveScanCron, service.ScanActive},
-		{service.config.JobDispatchCron, service.DispatchJobs},
+		{service.config.FullRefreshCron, "full_refresh", service.RefreshAll},
+		{service.config.PreferenceFullSyncCron, "preference_calibration", service.CalibratePreferences},
+		{service.config.ActiveScanCron, "active_scan", service.ScanActive},
+		{service.config.JobDispatchCron, "job_dispatch", service.DispatchJobs},
 	} {
+		name := entry.name
 		fn := entry.fn
-		if _, err := c.AddFunc(entry.spec, func() { scheduler.run("cron", fn) }); err != nil {
+		if _, err := c.AddFunc(entry.spec, func() { scheduler.run("cron", name, fn) }); err != nil {
 			panic(fmt.Sprintf("invalid library reminder cron %q: %v", entry.spec, err))
 		}
 	}
@@ -95,7 +102,7 @@ func (s *ReminderScheduler) startLoop(ctx context.Context, name string, interval
 	go func() {
 		defer s.wg.Done()
 		if immediate {
-			s.runTask(ctx, name, fn)
+			s.runTask(ctx, "loop", name, fn)
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -104,13 +111,13 @@ func (s *ReminderScheduler) startLoop(ctx context.Context, name string, interval
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runTask(ctx, name, fn)
+				s.runTask(ctx, "loop", name, fn)
 			}
 		}
 	}()
 }
 
-func (s *ReminderScheduler) run(name string, fn func(context.Context) error) {
+func (s *ReminderScheduler) run(trigger, name string, fn func(context.Context) error) {
 	s.mu.Lock()
 	cancel := s.cancel
 	ctx := s.rootCtx
@@ -118,7 +125,7 @@ func (s *ReminderScheduler) run(name string, fn func(context.Context) error) {
 	if cancel == nil {
 		return
 	}
-	s.runTask(ctx, name, fn)
+	s.runTask(ctx, trigger, name, fn)
 }
 
 // runTask 为 cron 和固定间隔任务统一设置单次执行边界与任务入口 Span。

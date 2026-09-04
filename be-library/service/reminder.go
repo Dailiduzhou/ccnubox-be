@@ -229,7 +229,7 @@ func (s *ReminderService) syncPreferences(ctx context.Context) error {
 		}
 		if s.config.ShouldBaselineOnEnable() {
 			if err := s.forEachSubscription(ctx, enabled, s.RefreshUser); err != nil {
-				s.logger.Warn("library reminder enable baseline batch failed", logger.Error(err))
+				return fmt.Errorf("enable baseline batch: %w", err)
 			}
 		}
 		cursor = next
@@ -247,7 +247,7 @@ func (s *ReminderService) rebuildPreferences(ctx context.Context) error {
 	}
 	if s.config.ShouldBaselineOnEnable() {
 		if err := s.forEachSubscription(ctx, enabled, s.RefreshUser); err != nil {
-			s.logger.Warn("library reminder rebuilt baseline batch failed", logger.Error(err))
+			return fmt.Errorf("rebuild baseline batch: %w", err)
 		}
 	}
 	return nil
@@ -262,7 +262,7 @@ func (s *ReminderService) refreshPendingBaselines(ctx context.Context) error {
 		return err
 	}
 	if err := s.forEachSubscription(ctx, pending, s.RefreshUser); err != nil {
-		s.logger.Warn("library reminder pending baseline batch failed", logger.Error(err))
+		return fmt.Errorf("pending baseline batch: %w", err)
 	}
 	return nil
 }
@@ -286,7 +286,7 @@ func (s *ReminderService) CalibratePreferences(ctx context.Context) error {
 	}
 	if s.config.ShouldBaselineOnEnable() {
 		if err := s.forEachSubscription(ctx, enabled, s.RefreshUser); err != nil {
-			s.logger.Warn("library reminder calibrated baseline batch failed", logger.Error(err))
+			return fmt.Errorf("calibrate baseline batch: %w", err)
 		}
 	}
 	// 释放互斥锁前重放与分页全量查询并发的变更，消除全量快照与增量变更的顺序间隙。
@@ -363,7 +363,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, libraryTokenFailureStatus(err))
-		return err
+		return stageFailure(err, "get_library_token", "token_rpc")
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
 		return err
@@ -371,7 +371,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	today, err := s.crawler.GetTodayReservations(ctx, token)
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
-		return err
+		return stageFailure(err, "get_today_reservations", upstreamFailureKind(err))
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
 		return err
@@ -383,7 +383,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	history, err := s.crawler.GetRecentHistory(ctx, token, crawler.HistoryWatermark{ReservationID: watermark})
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
-		return err
+		return stageFailure(err, "get_recent_history", upstreamFailureKind(err))
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
 		return err
@@ -391,7 +391,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	state, err := s.crawler.GetUserState(ctx, token)
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
-		return err
+		return stageFailure(err, "get_user_state", upstreamFailureKind(err))
 	}
 	// 部分历史分页可安全用于更新插入和新增事实，但不能据此执行“缺失即取消”的状态转换。
 	reservations := make(map[string]crawler.ReminderReservation, len(today)+len(history.Reservations))
@@ -402,7 +402,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 		reservations[row.ID] = row
 	}
 	now := s.now()
-	return s.dao.Transaction(ctx, func(txDAO *dao.ReminderDAO) error {
+	if err := s.dao.Transaction(ctx, func(txDAO *dao.ReminderDAO) error {
 		locked, err := txDAO.SubscriptionForUpdate(ctx, sub.StudentID)
 		if err != nil {
 			return err
@@ -421,7 +421,10 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 			return err
 		}
 		return txDAO.MarkBaseline(ctx, sub.StudentID, now, dao.SubscriptionAuthOK)
-	})
+	}); err != nil {
+		return stageFailure(err, "save_reservation_state", "database")
+	}
+	return nil
 }
 
 func (s *ReminderService) reconcileReservation(ctx context.Context, sub dao.LibraryReminderSubscription, row crawler.ReminderReservation, now time.Time) error {
@@ -431,7 +434,7 @@ func (s *ReminderService) reconcileReservation(ctx context.Context, sub dao.Libr
 	}
 	status := strings.ToUpper(strings.TrimSpace(row.Status))
 	if status != "" && !terminalReservationStatus(status) && status != "USING" && status != "WAIT" && status != "SUCCESS" {
-		s.logger.Warn("unknown library reservation status", logger.String("student_id", maskStudentID(sub.StudentID)), logger.String("status", status))
+		s.logger.WithContext(ctx).Warn("unknown library reservation status", logger.String("student_id", maskStudentID(sub.StudentID)), logger.String("status", status))
 		if s.metrics != nil {
 			s.metrics.UnknownReservationStatusTotal.Inc()
 		}
@@ -551,17 +554,17 @@ func (s *ReminderService) scanActiveUserAttempt(ctx context.Context, sub dao.Lib
 	}
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
-		return err
+		return stageFailure(err, "get_library_token", "token_rpc")
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
 		return err
 	}
 	current, err := s.crawler.GetCurrentReservation(ctx, token)
 	if err != nil {
-		return err
+		return stageFailure(err, "get_current_reservation", upstreamFailureKind(err))
 	}
 	now := s.now()
-	return s.dao.Transaction(ctx, func(txDAO *dao.ReminderDAO) error {
+	if err := s.dao.Transaction(ctx, func(txDAO *dao.ReminderDAO) error {
 		locked, err := txDAO.SubscriptionForUpdate(ctx, sub.StudentID)
 		if err != nil {
 			return err
@@ -572,7 +575,10 @@ func (s *ReminderService) scanActiveUserAttempt(ctx context.Context, sub dao.Lib
 		txService := *s
 		txService.dao = txDAO
 		return txService.applyActiveObservation(ctx, *locked, current, now)
-	})
+	}); err != nil {
+		return stageFailure(err, "save_active_observation", "database")
+	}
+	return nil
 }
 
 func (s *ReminderService) applyActiveObservation(ctx context.Context, sub dao.LibraryReminderSubscription, current *crawler.ReminderReservation, now time.Time) error {
@@ -764,7 +770,7 @@ launch:
 			defer wg.Done()
 			defer func() { <-sem }()
 			if err := s.dispatchJob(ctx, job); err != nil {
-				s.logger.Warn("library reminder job failed", logger.Int64("job_id", job.ID), logger.String("notification_type", job.Type), logger.Error(err))
+				s.logger.WithContext(ctx).Warn("library reminder job failed", logger.Int64("job_id", job.ID), logger.String("notification_type", job.Type), logger.Error(err))
 				// dispatchJob 可能已完成重排；释放操作只会命中仍属于当前 claim 的 running 记录。
 				s.releaseClaimedJobs(ctx, []dao.NotificationJob{job})
 			}
@@ -784,7 +790,7 @@ func (s *ReminderService) releaseClaimedJobs(parent context.Context, jobs []dao.
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), claimReleaseTimeout)
 	defer cancel()
 	if err := s.dao.ReleaseClaimedJobs(releaseCtx, jobs); err != nil {
-		s.logger.Warn("release claimed library reminder jobs failed", logger.Int("count", len(jobs)), logger.Error(err))
+		s.logger.WithContext(parent).Warn("release claimed library reminder jobs failed", logger.Int("count", len(jobs)), logger.Error(err))
 	}
 }
 
@@ -937,10 +943,9 @@ func (s *ReminderService) SendOutbox(ctx context.Context) (err error) {
 		}
 		row := rows[i]
 		if err := s.sendOutboxRow(ctx, row); err != nil {
-			s.logger.Warn("library reminder outbox row failed",
+			s.logger.WithContext(ctx).Warn("library reminder outbox row failed",
 				logger.Int64("outbox_id", row.ID),
 				logger.String("notification_type", row.Type),
-				logger.String("dedupe_key", row.DedupeKey),
 				logger.String("student_id", maskStudentID(row.StudentID)),
 				logger.Int("attempt", row.Attempts),
 				logger.Error(err),
@@ -1002,10 +1007,9 @@ func (s *ReminderService) sendOutboxRow(ctx context.Context, row dao.Notificatio
 		}
 		return s.dao.FinishOutbox(ctx, row, status, "", nil)
 	}
-	s.logger.Warn("library reminder outbox publish failed",
+	s.logger.WithContext(ctx).Warn("library reminder outbox publish failed",
 		logger.Int64("outbox_id", row.ID),
 		logger.String("notification_type", row.Type),
-		logger.String("dedupe_key", row.DedupeKey),
 		logger.String("student_id", maskStudentID(row.StudentID)),
 		logger.Int("attempt", row.Attempts),
 		logger.Error(publishErr),
@@ -1030,9 +1034,8 @@ func (s *ReminderService) releaseOutboxAfterFailure(parent context.Context, row 
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), claimReleaseTimeout)
 	defer cancel()
 	if err := s.dao.FinishOutbox(releaseCtx, row, dao.OutboxFailed, lastError, next); err != nil {
-		s.logger.Warn("library reminder outbox release failed",
+		s.logger.WithContext(parent).Warn("library reminder outbox release failed",
 			logger.Int64("outbox_id", row.ID),
-			logger.String("dedupe_key", row.DedupeKey),
 			logger.Error(err),
 		)
 	}
@@ -1045,7 +1048,7 @@ func (s *ReminderService) releaseClaimedOutbox(parent context.Context, rows []da
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), claimReleaseTimeout)
 	defer cancel()
 	if err := s.dao.ReleaseClaimedOutbox(releaseCtx, rows); err != nil {
-		s.logger.Warn("release claimed library reminder outbox failed", logger.Int("count", len(rows)), logger.Error(err))
+		s.logger.WithContext(parent).Warn("release claimed library reminder outbox failed", logger.Int("count", len(rows)), logger.Error(err))
 	}
 }
 
@@ -1055,7 +1058,7 @@ func (s *ReminderService) observeWorkMetrics(ctx context.Context) {
 	}
 	snapshot, err := s.dao.MetricsSnapshot(ctx, s.now(), s.config.RetryMaxAttempts)
 	if err != nil {
-		s.logger.Warn("collect library reminder work metrics failed", logger.Error(err))
+		s.logger.WithContext(ctx).Warn("collect library reminder work metrics failed", logger.Error(err))
 		return
 	}
 	s.metrics.NotificationJobs.Reset()
@@ -1173,51 +1176,187 @@ func (s *ReminderService) subscriptionStillCurrent(ctx context.Context, expected
 	return current.Enabled && current.PreferenceVersion == expected.PreferenceVersion, nil
 }
 
+// refreshFailure 为单用户刷新失败附加低基数阶段（stage）与错误分类（kind）信息。
+type refreshFailure struct {
+	stage string
+	kind  string
+	err   error
+}
+
+func (e *refreshFailure) Error() string {
+	return strings.ReplaceAll(e.stage, "_", " ") + ": " + e.err.Error()
+}
+
+func (e *refreshFailure) Unwrap() error { return e.err }
+
+// stageFailure 包装刷新链路错误，并优先按 context 覆盖错误分类，
+// 使批量汇总能区分超时/取消与具体阶段错误。
+func stageFailure(err error, stage, kind string) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		kind = "context_deadline"
+	case errors.Is(err, context.Canceled):
+		kind = "context_canceled"
+	}
+	return &refreshFailure{stage: stage, kind: kind, err: err}
+}
+
+// upstreamFailureKind 将学校上游错误映射为批量错误的低基数分类，
+// 复用 crawler 导出的上游错误分类结果。
+func upstreamFailureKind(err error) string {
+	switch crawler.ClassifyUpstreamError(err) {
+	case "timeout":
+		return "upstream_timeout"
+	case "auth_error":
+		return "upstream_auth"
+	case "http_error":
+		return "upstream_http"
+	case "business_error":
+		return "upstream_business"
+	case "network_or_decode_error":
+		return "upstream_http"
+	default:
+		return "invalid_response"
+	}
+}
+
+// classifyFallbackFailure 为未附着阶段信息的错误给出低基数分类。
+func classifyFallbackFailure(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context_deadline"
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, gorm.ErrRecordNotFound),
+		errors.Is(err, gorm.ErrDuplicatedKey),
+		errors.Is(err, gorm.ErrInvalidTransaction),
+		errors.Is(err, gorm.ErrNotImplemented):
+		return "database"
+	default:
+		return "unknown"
+	}
+}
+
+// refreshFailureInfo 从错误中提取阶段与分类；未附着 refreshFailure 时给出回退分类。
+func refreshFailureInfo(err error) (stage, kind string) {
+	var failure *refreshFailure
+	if errors.As(err, &failure) {
+		return failure.stage, failure.kind
+	}
+	return "", classifyFallbackFailure(err)
+}
+
+const batchErrorSampleLimit = 20
+
+// subscriptionFailure 保留批量刷新中的单条失败样例，StudentID 必须已脱敏。
+type subscriptionFailure struct {
+	StudentID string
+	Stage     string
+	Err       error
+}
+
+// subscriptionBatchError 汇总批量订阅刷新的结果与分类计数，避免用 errors.Join 拼接
+// 全部用户错误导致错误文本与内存无限增长；通过 Unwrap 暴露代表性 Cause，
+// 使 errors.Is(err, context.DeadlineExceeded) 仍然可用。
+type subscriptionBatchError struct {
+	Total     int
+	Launched  int
+	Succeeded int
+	Failed    int
+	Canceled  int
+	Groups    map[string]int
+	Samples   []subscriptionFailure
+	Cause     error
+}
+
+func (e *subscriptionBatchError) Error() string {
+	return fmt.Sprintf("subscription batch failed: total=%d launched=%d succeeded=%d failed=%d canceled=%d", e.Total, e.Launched, e.Succeeded, e.Failed, e.Canceled)
+}
+
+func (e *subscriptionBatchError) Unwrap() error { return e.Cause }
+
+// SampleLogs 输出有限的脱敏错误样例，便于结构化日志。
+func (e *subscriptionBatchError) SampleLogs() []map[string]string {
+	samples := make([]map[string]string, 0, len(e.Samples))
+	for _, sample := range e.Samples {
+		samples = append(samples, map[string]string{
+			"student_id": sample.StudentID,
+			"stage":      sample.Stage,
+			"error":      sample.Err.Error(),
+		})
+	}
+	return samples
+}
+
+// LogFields 将批量结果转换为 scheduler 最终任务失败日志的结构化字段。
+func (e *subscriptionBatchError) LogFields() []logger.Field {
+	return []logger.Field{
+		logger.Int("total", e.Total),
+		logger.Int("launched", e.Launched),
+		logger.Int("succeeded", e.Succeeded),
+		logger.Int("failed", e.Failed),
+		logger.Int("canceled", e.Canceled),
+		logger.Any("error_groups", e.Groups),
+		logger.Any("error_samples", e.SampleLogs()),
+	}
+}
+
+// forEachSubscription 并发执行用户任务并汇总批量结果。任何用户失败都会保留
+// 分类计数与有限数量的脱敏样例，并通过 subscriptionBatchError 向上返回，
+// 不再丢弃其他用户的失败原因。
 func (s *ReminderService) forEachSubscription(ctx context.Context, rows []dao.LibraryReminderSubscription, fn func(context.Context, dao.LibraryReminderSubscription) error) error {
 	limit := s.config.UserConcurrency
 	if limit <= 0 {
 		limit = 1
 	}
+	batch := &subscriptionBatchError{Total: len(rows), Groups: map[string]int{}}
 	sem := make(chan struct{}, limit)
-	errCh := make(chan error, len(rows))
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 	var launchErr error
 
-	launching := true
 	for i := range rows {
-		if !launching {
-			break
-		}
 		if err := ctx.Err(); err != nil {
 			launchErr = err
 			break
 		}
-		row := rows[i]
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			launchErr = ctx.Err()
-			launching = false
-			continue
+			break
 		}
+		row := rows[i]
+		batch.Launched++
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			if err := fn(ctx, row); err != nil {
-				errCh <- err
+				stage, kind := refreshFailureInfo(err)
+				mu.Lock()
+				batch.Failed++
+				batch.Groups[kind]++
+				if len(batch.Samples) < batchErrorSampleLimit {
+					batch.Samples = append(batch.Samples, subscriptionFailure{StudentID: maskStudentID(row.StudentID), Stage: stage, Err: err})
+				}
+				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
-	close(errCh)
-	first := launchErr
-	for err := range errCh {
-		if first == nil {
-			first = err
-		}
+	batch.Canceled = batch.Total - batch.Launched
+	batch.Succeeded = batch.Launched - batch.Failed
+	if launchErr == nil && batch.Failed == 0 {
+		return nil
 	}
-	return first
+	if launchErr != nil {
+		batch.Cause = launchErr
+	} else if len(batch.Samples) > 0 {
+		// 代表性失败：仅用于 errors.Is 判断，不展开全部用户错误。
+		batch.Cause = batch.Samples[0].Err
+	}
+	return batch
 }
 
 // runUserOperation 先获取一次用户任务许可，再在许可范围内完成全部重试，
