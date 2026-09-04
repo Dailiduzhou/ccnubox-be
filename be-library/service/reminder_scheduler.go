@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +10,10 @@ import (
 	"github.com/asynccnu/ccnubox-be/be-library/tool"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/robfig/cron/v3"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const reminderTaskTimeout = 25 * time.Minute
@@ -43,15 +48,17 @@ func NewReminderScheduler(service *ReminderService, l logger.Logger) *ReminderSc
 	}
 	for _, entry := range []struct {
 		spec string
+		name string
 		fn   func(context.Context) error
 	}{
-		{service.config.FullRefreshCron, service.RefreshAll},
-		{service.config.PreferenceFullSyncCron, service.CalibratePreferences},
-		{service.config.ActiveScanCron, service.ScanActive},
-		{service.config.JobDispatchCron, service.DispatchJobs},
+		{service.config.FullRefreshCron, "full_refresh", service.RefreshAll},
+		{service.config.PreferenceFullSyncCron, "preference_calibration", service.CalibratePreferences},
+		{service.config.ActiveScanCron, "active_scan", service.ScanActive},
+		{service.config.JobDispatchCron, "job_dispatch", service.DispatchJobs},
 	} {
+		name := entry.name
 		fn := entry.fn
-		if _, err := c.AddFunc(entry.spec, func() { scheduler.run("cron", fn) }); err != nil {
+		if _, err := c.AddFunc(entry.spec, func() { scheduler.run("cron", name, fn) }); err != nil {
 			panic(fmt.Sprintf("invalid library reminder cron %q: %v", entry.spec, err))
 		}
 	}
@@ -95,7 +102,7 @@ func (s *ReminderScheduler) startLoop(ctx context.Context, name string, interval
 	go func() {
 		defer s.wg.Done()
 		if immediate {
-			s.runTask(ctx, name, fn)
+			s.runTask(ctx, "loop", name, fn)
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -104,13 +111,13 @@ func (s *ReminderScheduler) startLoop(ctx context.Context, name string, interval
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runTask(ctx, name, fn)
+				s.runTask(ctx, "loop", name, fn)
 			}
 		}
 	}()
 }
 
-func (s *ReminderScheduler) run(name string, fn func(context.Context) error) {
+func (s *ReminderScheduler) run(trigger, name string, fn func(context.Context) error) {
 	s.mu.Lock()
 	cancel := s.cancel
 	ctx := s.rootCtx
@@ -118,16 +125,32 @@ func (s *ReminderScheduler) run(name string, fn func(context.Context) error) {
 	if cancel == nil {
 		return
 	}
-	s.runTask(ctx, name, fn)
+	s.runTask(ctx, trigger, name, fn)
 }
 
-// runTask 为 cron 和固定间隔任务统一设置单次执行边界。
-// 超时依赖下游遵守 context，无法强制终止忽略取消信号的调用。
-func (s *ReminderScheduler) runTask(parent context.Context, name string, fn func(context.Context) error) {
-	taskCtx, cancel := context.WithTimeout(parent, reminderTaskTimeout)
+// runTask 为 cron 和固定间隔任务统一设置单次执行边界与任务入口 Span。
+// trigger 仅使用 cron 或 loop；超时依赖下游遵守 context，无法强制终止忽略取消信号的调用。
+func (s *ReminderScheduler) runTask(parent context.Context, trigger, name string, fn func(context.Context) error) {
+	tracer := otel.Tracer("be-library")
+	ctx, span := tracer.Start(parent, "library.reminder."+name,
+		trace.WithAttributes(
+			attribute.String("task.name", name),
+			attribute.String("task.trigger", trigger),
+			attribute.Int64("task.timeout_ms", reminderTaskTimeout.Milliseconds()),
+		))
+	defer span.End()
+	taskCtx, cancel := context.WithTimeout(ctx, reminderTaskTimeout)
 	defer cancel()
 	if err := fn(taskCtx); err != nil && parent.Err() == nil {
-		s.logger.Warn("library reminder task failed", logger.String("task", name), logger.Error(err))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		fields := []logger.Field{logger.String("task", name), logger.String("trigger", trigger)}
+		var batch *subscriptionBatchError
+		if errors.As(err, &batch) {
+			fields = append(fields, batch.LogFields()...)
+		}
+		fields = append(fields, logger.Error(err))
+		s.logger.WithContext(taskCtx).Warn("library reminder task failed", fields...)
 	}
 }
 

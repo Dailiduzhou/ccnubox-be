@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -204,6 +205,7 @@ type reminderEnvelope struct {
 }
 
 type upstreamError struct {
+	Endpoint string
 	HTTPCode int
 	Code     int
 	Message  string
@@ -211,7 +213,10 @@ type upstreamError struct {
 }
 
 func (e *upstreamError) Error() string {
-	return fmt.Sprintf("%v: http=%d code=%d message=%s", ErrUpstreamStateUnknown, e.HTTPCode, e.Code, e.Message)
+	if e.Cause == nil {
+		return fmt.Sprintf("%v: endpoint=%s http=%d code=%d message=%s", ErrUpstreamStateUnknown, e.Endpoint, e.HTTPCode, e.Code, e.Message)
+	}
+	return fmt.Sprintf("%v: endpoint=%s http=%d code=%d message=%s cause=%v", ErrUpstreamStateUnknown, e.Endpoint, e.HTTPCode, e.Code, e.Message, e.Cause)
 }
 func (e *upstreamError) Unwrap() error { return e.Cause }
 func (e *upstreamError) Is(target error) bool {
@@ -528,41 +533,47 @@ func (c *ReminderHTTPClient) fetchSigningKey(parent context.Context, token strin
 
 func (c *ReminderHTTPClient) do(req *http.Request) (data json.RawMessage, err error) {
 	started := time.Now()
+	endpoint := reminderMetricEndpoint(req.URL.Path)
 	if c.metrics != nil {
-		endpoint := reminderMetricEndpoint(req.URL.Path)
 		defer func() {
 			result := "success"
 			if err != nil {
-				result = classifyReminderUpstreamError(err)
+				result = ClassifyUpstreamError(err)
 			}
 			c.metrics.UpstreamRequestsTotal.WithLabelValues(endpoint, result).Inc()
 			c.metrics.UpstreamDurationSeconds.WithLabelValues(endpoint).Observe(time.Since(started).Seconds())
 		}()
 	}
 	if err := c.waitRate(req.Context()); err != nil {
-		return nil, &upstreamError{Cause: err}
+		return nil, &upstreamError{Endpoint: endpoint, Cause: err}
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, &upstreamError{Cause: err}
+		// http.Client 失败时返回 *url.Error，其文本包含完整请求 URL；
+		// 仅保留底层错误作为 cause，避免完整 URL 进入日志与任务错误样例。
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) && urlErr.Err != nil {
+			err = urlErr.Err
+		}
+		return nil, &upstreamError{Endpoint: endpoint, Cause: err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, &upstreamError{HTTPCode: resp.StatusCode, Cause: err}
+		return nil, &upstreamError{Endpoint: endpoint, HTTPCode: resp.StatusCode, Cause: err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &upstreamError{HTTPCode: resp.StatusCode}
+		return nil, &upstreamError{Endpoint: endpoint, HTTPCode: resp.StatusCode}
 	}
 	var env reminderEnvelope
 	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, &upstreamError{HTTPCode: resp.StatusCode, Cause: err}
+		return nil, &upstreamError{Endpoint: endpoint, HTTPCode: resp.StatusCode, Cause: err}
 	}
 	if !env.Status || (env.Code != 0 && env.Code != http.StatusOK) {
-		return nil, &upstreamError{HTTPCode: resp.StatusCode, Code: env.Code, Message: env.Message}
+		return nil, &upstreamError{Endpoint: endpoint, HTTPCode: resp.StatusCode, Code: env.Code, Message: env.Message}
 	}
 	if env.Data == nil {
-		return nil, &upstreamError{HTTPCode: resp.StatusCode, Code: env.Code, Message: "missing data"}
+		return nil, &upstreamError{Endpoint: endpoint, HTTPCode: resp.StatusCode, Code: env.Code, Message: "missing data"}
 	}
 	return env.Data, nil
 }
@@ -586,7 +597,9 @@ func reminderMetricEndpoint(path string) string {
 	}
 }
 
-func classifyReminderUpstreamError(err error) string {
+// ClassifyUpstreamError 将上游请求错误归类为低基数类别，供指标与 service 层批量错误分类复用。
+// 返回值为 timeout/auth_error/http_error/business_error/network_or_decode_error/invalid_response。
+func ClassifyUpstreamError(err error) string {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
 	}
