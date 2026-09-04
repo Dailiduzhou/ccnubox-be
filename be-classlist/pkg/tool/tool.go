@@ -12,7 +12,7 @@ func CheckSY(semester, year string) bool {
 	var tag1, tag2 bool
 	y, err := strconv.Atoi(year)
 	currentYear := time.Now().Year()
-	if err != nil || y < 2006 || y >= currentYear+2 { //年份小于2006或者年份大于后年的不予处理
+	if err != nil || y < 2006 || y >= currentYear+2 { // 年份小于2006或者年份大于后年的不予处理
 		tag1 = false
 	} else {
 		tag1 = true
@@ -24,6 +24,7 @@ func CheckSY(semester, year string) bool {
 	}
 	return tag1 && tag2
 }
+
 func ParseWeeks(weeks int64) []int {
 	if weeks <= 0 {
 		return []int{}
@@ -36,6 +37,7 @@ func ParseWeeks(weeks int64) []int {
 	}
 	return weeksList
 }
+
 func FormatWeeks(weeks []int) string {
 	if len(weeks) == 0 {
 		return ""
@@ -156,4 +158,13 @@ func parseSectionRange(part string) (int, int, error) {
 func ToShanghaiTime(t time.Time) time.Time {
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	return t.In(loc)
+}
+
+// MaskStudentID 脱敏学号：保留前2后2，中间用 **** 隐藏
+// 保留前后缀便于日志排查时区分学生，同时隐藏中间部分
+func MaskStudentID(value string) string {
+	if len(value) <= 4 {
+		return "****"
+	}
+	return value[:2] + "****" + value[len(value)-2:]
 }
