@@ -175,15 +175,19 @@ jobs:
       - build
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Set up SSH key
         env:
-          SERVER_ADDR: ${{ secrets.SERVER_ADDR }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "$SERVER_ADDR" >> ~/.ssh/known_hosts
+          cp .github/known_hosts ~/.ssh/known_hosts
 
       - name: Deploy selected services to preview
         env:
@@ -259,4 +263,4 @@ jobs:
             docker image prune -a -f --filter "until=24h"
           ) 200>/tmp/ccnubox_deploy.lock
           REMOTE_SCRIPT
-          } | ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_ADDR" bash -s
+          } | ssh -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_ADDR" bash -s

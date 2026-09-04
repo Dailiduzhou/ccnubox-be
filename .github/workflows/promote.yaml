@@ -20,15 +20,19 @@ jobs:
     if: github.repository == 'asynccnu/ccnubox-be'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Set up SSH key
         env:
-          SERVER_ADDR: ${{ secrets.SERVER_ADDR }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "$SERVER_ADDR" >> ~/.ssh/known_hosts
+          cp .github/known_hosts ~/.ssh/known_hosts
 
       - name: Sync production to preview versions
         env:
@@ -61,10 +65,32 @@ jobs:
             flock -x 200
             cd ~/ccnubox_v3
 
-            # No builds here. Mirror the image tags verified on preview and
-            # restart production with them. Services whose tag is unchanged
-            # are no-ops for `docker compose up -d`.
-            cp ~/ccnubox-preview/.env ./.env
+            # prod .env manages version numbers only, so sync just the image
+            # tag of each known service from the preview .env and preserve
+            # anything else production holds. No builds happen here: the
+            # deploy workflow already pushed these images.
+            services=(be-ccnu be-class be-classlist be-content be-counter be-elecprice be-feed be-grade be-library be-proxy be-user bff)
+            changed=0
+            for service in "${services[@]}"; do
+              KEY="$(printf '%s' "$service" | tr '[:lower:]-' '[:upper:]_')"
+              value="$(sed -n "s/^${KEY}=//p" ~/ccnubox-preview/.env | tail -n 1)"
+              current="$(sed -n "s/^${KEY}=//p" ./.env | tail -n 1)"
+              if [[ -z "$value" || "$value" == "$current" ]]; then
+                continue
+              fi
+              if grep -q "^${KEY}=" ./.env; then
+                sed -i "s/^${KEY}=.*/${KEY}=${value}/" ./.env
+              else
+                echo "${KEY}=${value}" >> ./.env
+              fi
+              changed=1
+              echo "${KEY}: ${current:-<missing>} -> ${value}"
+            done
+
+            if ((changed == 0)); then
+              echo 'Nothing to promote: production already runs the preview versions.'
+              exit 0
+            fi
 
             echo "$REGISTRY_PASSWORD" | docker login \
               --username="$REGISTRY_USER" \
@@ -74,9 +100,6 @@ jobs:
             docker compose pull
             docker compose up -d
             docker image prune -a -f --filter "until=24h"
-
-            echo 'Production versions now:'
-            cat ./.env
           ) 200>/tmp/ccnubox_deploy.lock
           REMOTE_SCRIPT
-          } | ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_ADDR" bash -s
+          } | ssh -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_ADDR" bash -s
