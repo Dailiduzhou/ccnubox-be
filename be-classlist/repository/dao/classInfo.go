@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
+	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/tool"
 	"github.com/asynccnu/ccnubox-be/be-classlist/repository/model"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
@@ -122,7 +123,7 @@ func (c ClassInfoDAO) GetClassInfos(ctx context.Context, stuId, xnm, xqm string)
 		).
 		Find(&cla).Error
 	if err != nil {
-		return nil, errorx.Errorf("dao.classInfo.GetClassInfos: stuID=%s, year=%s, semester=%s: %w", stuId, xnm, xqm, err)
+		return nil, errorx.Errorf("dao.classInfo.GetClassInfos: stuID=%s, year=%s, semester=%s: %w", tool.MaskStudentID(stuId), xnm, xqm, err)
 	}
 	if len(cla) == 0 {
 		return nil, nil
@@ -142,7 +143,7 @@ func (c ClassInfoDAO) GetAddedClassInfos(ctx context.Context, stuID, xnm, xqm st
 			stuID, xnm, xqm, true,
 		).Find(&cla).Error
 	if err != nil {
-		return nil, errorx.Errorf("dao.classInfo.GetAddedClassInfos: stuID=%s, year=%s, semester=%s: %w", stuID, xnm, xqm, err)
+		return nil, errorx.Errorf("dao.classInfo.GetAddedClassInfos: stuID=%s, year=%s, semester=%s: %w", tool.MaskStudentID(stuID), xnm, xqm, err)
 	}
 	return cla, nil
 }
@@ -162,7 +163,7 @@ func (c ClassInfoDAO) GetClassNatures(ctx context.Context, stuID string) ([]stri
 		Where("id IN (?) AND nature IS NOT NULL", subQuery).
 		Pluck("nature", &natures).Error
 	if err != nil {
-		return nil, errorx.Errorf("dao.classInfo.GetClassNatures: stuID=%s: %w", stuID, err)
+		return nil, errorx.Errorf("dao.classInfo.GetClassNatures: stuID=%s: %w", tool.MaskStudentID(stuID), err)
 	}
 	return natures, nil
 }

@@ -57,7 +57,7 @@ func NewClassUsecase(
 func (cluc *ClassUsecase) GetClasses(ctx context.Context, stuID, year, semester string, refresh bool) ([]*model.ClassInfoBO, *time.Time, error) {
 	// 能返回到最上层的错误，就统一在最上层打错误日志
 	logh := cluc.log.WithContext(ctx).With(
-		logger.String("stu_id", stuID),
+		logger.String("stu_id", classTool.MaskStudentID(stuID)),
 		logger.String("year", year),
 		logger.String("semester", semester),
 		logger.Any("refresh", refresh),
@@ -170,7 +170,7 @@ func (cluc *ClassUsecase) AddClass(ctx context.Context, stuID string, info *mode
 	}
 	if conflict {
 		logh.Error("class schedule conflict",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", info.Year),
 			logger.String("semester", info.Semester),
 			logger.String("class_id", info.ID),
@@ -204,7 +204,7 @@ func (cluc *ClassUsecase) DeleteClass(ctx context.Context, stuID, year, semester
 	}
 	if target.MetaData.IsOfficial {
 		logh.Warn("reject deleting official class",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.String("class_id", classID),
@@ -214,7 +214,7 @@ func (cluc *ClassUsecase) DeleteClass(ctx context.Context, stuID, year, semester
 
 	if err := cluc.classRepo.DeleteAddedClasses(ctx, stuID, year, semester, []string{classID}); err != nil {
 		logh.Error("delete added class failed",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.String("class_id", classID),
@@ -247,7 +247,7 @@ func (cluc *ClassUsecase) UpdateClass(ctx context.Context, stuID, year, semester
 	// 防御一下，正常情况不可能升级官方课程的，前端不会提供入口
 	if oldInfo.MetaData.IsOfficial {
 		logh.Warn("reject updating official class",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.String("class_id", oldClassID),
@@ -282,7 +282,7 @@ func (cluc *ClassUsecase) UpdateClass(ctx context.Context, stuID, year, semester
 
 	if newInfo.ID != oldClassID && cluc.classRepo.AddedCourseExists(ctx, stuID, year, semester, newInfo.ID) {
 		logh.Error("class already exists",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.String("class_id", newInfo.ID),
@@ -297,7 +297,7 @@ func (cluc *ClassUsecase) UpdateClass(ctx context.Context, stuID, year, semester
 	}
 	if conflict {
 		logh.Error("class schedule conflict",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.String("old_class_id", oldClassID),
@@ -320,7 +320,7 @@ func (cluc *ClassUsecase) UpdateClass(ctx context.Context, stuID, year, semester
 	}
 	if err := cluc.classRepo.UpdateAddedClass(ctx, stuID, year, semester, oldClassID, &newInfo, sc); err != nil {
 		logh.Error("update added class failed",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.String("old_class_id", oldClassID),
@@ -353,7 +353,7 @@ func (cluc *ClassUsecase) UpdateClassNote(ctx context.Context, stuID, year, seme
 
 	if err := cluc.classRepo.UpdateClassNote(ctx, stuID, year, semester, classID, note); err != nil {
 		logh.Error("update class note failed",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.String("class_id", classID),

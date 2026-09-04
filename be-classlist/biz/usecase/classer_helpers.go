@@ -145,7 +145,7 @@ func (cluc *ClassUsecase) hasScheduleConflict(ctx context.Context, stuID string,
 	// 判断这个课程是否存在，存在代表冲突
 	if cluc.classRepo.AddedCourseExists(ctx, stuID, info.Year, info.Semester, info.ID) {
 		logh.Error("class already exists",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", info.Year),
 			logger.String("semester", info.Semester),
 			logger.String("class_id", info.ID),
@@ -424,7 +424,7 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 		cookie, err := cluc.ccnu.GetCookie(ctx, stuID)
 		if err != nil {
 			cookieSuccess = false
-			logh.Errorf("get cookie from ccnu failed stu_id=%s: %+v", stuID, err)
+			logh.Errorf("get cookie from ccnu failed stu_id=%s: %+v", classTool.MaskStudentID(stuID), err)
 		}
 		return cookie, err
 	}()
@@ -435,8 +435,8 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 
 	if len(cookie) == 0 {
 		crawSuccess = false
-		logh.Error(fmt.Sprintf("the cookie from other service is empty for stu_id:%v", stuID))
-		return nil, nil, -1, fmt.Errorf("%w: empty cookie for stu_id=%s", biz.ErrCrawlerAuthentication, stuID)
+		logh.Error(fmt.Sprintf("the cookie from other service is empty for stu_id:%v", classTool.MaskStudentID(stuID)))
+		return nil, nil, -1, fmt.Errorf("%w: empty cookie for stu_id=%s", biz.ErrCrawlerAuthentication, classTool.MaskStudentID(stuID))
 	}
 
 	var stu biz.Student
@@ -449,7 +449,7 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 		stu = &biz.GraduateStudent{}
 	default:
 		crawSuccess = false
-		return nil, nil, -1, fmt.Errorf("%w: stu_id=%s", biz.ErrUnsupportedStudentType, stuID)
+		return nil, nil, -1, fmt.Errorf("%w: stu_id=%s", biz.ErrUnsupportedStudentType, classTool.MaskStudentID(stuID))
 	}
 
 	ci, sc, sum, err := func() ([]*model.ClassInfoBO, []*model.StudentCourseBO, int, error) {
@@ -459,7 +459,7 @@ func (cluc *ClassUsecase) getCourseFromCrawler(ctx context.Context, stuID string
 
 		classinfos, scs, sum, err := stu.GetClass(ctx, stuID, year, semester, cookie, cluc.crawler)
 		if err != nil {
-			logh.Errorf("craw classlist stu_id=%s year=%s semester=%s failed: %+v", stuID, year, semester, err)
+			logh.Errorf("craw classlist stu_id=%s year=%s semester=%s failed: %+v", classTool.MaskStudentID(stuID), year, semester, err)
 			return nil, nil, -1, err
 		}
 		if len(classinfos) == 0 && len(scs) == 0 {
@@ -508,7 +508,7 @@ func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, yea
 	logh := cluc.log.WithContext(ctx)
 	if !shouldRetryClassRefresh(cause) {
 		logh.Warn("class refresh failure is not retryable",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.Int("attempt", attempt),
@@ -519,7 +519,7 @@ func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, yea
 	if attempt >= maxAttempts {
 		// 超过最大重试，打日志
 		logh.Error("class refresh retries exhausted",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.Int("attempt", attempt),
@@ -535,7 +535,7 @@ func (cluc *ClassUsecase) coordinateRefreshRetry(ctx context.Context, stuID, yea
 	defer cancel()
 	if err := cluc.sendRetryMsg(publishCtx, stuID, year, semester, nextAttempt, maxAttempts); err != nil {
 		logh.Error("schedule class refresh retry failed",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", classTool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.Int("attempt", nextAttempt),
@@ -660,7 +660,7 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 		return true, err
 	}
 
-	logh.Infof("consume refresh retry msg stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts)
+	logh.Infof("consume refresh retry msg stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d", classTool.MaskStudentID(retryInfo.StuID), retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts)
 	retryJobTimeout := defaultRefreshJobTimeout
 	if cluc.conf != nil && cluc.conf.ClassListConf != nil {
 		configuredTimeout := time.Duration(cluc.conf.ClassListConf.WaitCrawTime) * time.Millisecond
@@ -668,7 +668,7 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 	}
 	_, err = cluc.doCrawlAttemptWithSingleflight(ctx, retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, retryJobTimeout)
 	if err != nil {
-		logh.Errorf("handle refresh retry msg failed stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d: %+v", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, err)
+		logh.Errorf("handle refresh retry msg failed stu_id=%s year=%s semester=%s attempt=%d max_attempts=%d: %+v", classTool.MaskStudentID(retryInfo.StuID), retryInfo.Year, retryInfo.Semester, retryInfo.Attempt, retryInfo.MaxAttempts, err)
 		var handoffErr *retryHandoffError
 		if errors.As(err, &handoffErr) {
 			return false, err
@@ -676,7 +676,7 @@ func (cluc *ClassUsecase) handleRetryMessage(ctx context.Context, _ []byte, valu
 		// 下一条重试已发布，或当前错误已判定为终态，可以确认当前消息。
 		return true, err
 	}
-	logh.Infof("handle refresh retry msg succeeded stu_id=%s year=%s semester=%s attempt=%d", retryInfo.StuID, retryInfo.Year, retryInfo.Semester, retryInfo.Attempt)
+	logh.Infof("handle refresh retry msg succeeded stu_id=%s year=%s semester=%s attempt=%d", classTool.MaskStudentID(retryInfo.StuID), retryInfo.Year, retryInfo.Semester, retryInfo.Attempt)
 	return true, nil
 }
 

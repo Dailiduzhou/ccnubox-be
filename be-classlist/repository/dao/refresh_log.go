@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/tool"
 	"github.com/asynccnu/ccnubox-be/be-classlist/repository/model"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"gorm.io/gorm"
@@ -30,7 +31,7 @@ func (r *RefreshLogDAO) GetLastRefreshTime(ctx context.Context, stuID, year, sem
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
-		return nil, errorx.Errorf("dao.refreshLog.GetLastRefreshTime: stuID=%s, year=%s, semester=%s, status=%s: %w", stuID, year, semester, status, err)
+		return nil, errorx.Errorf("dao.refreshLog.GetLastRefreshTime: stuID=%s, year=%s, semester=%s, status=%s: %w", tool.MaskStudentID(stuID), year, semester, status, err)
 	}
 	return &refreshLog.UpdatedAt, nil
 }
@@ -46,7 +47,7 @@ func (r *RefreshLogDAO) InsertRefreshLog(ctx context.Context, stuID, year, semes
 	}
 	err := r.createRefreshLog(ctx, &refreshLog)
 	if err != nil {
-		return 0, errorx.Errorf("dao.refreshLog.InsertRefreshLog: stuID=%s, year=%s, semester=%s, status=%s: %w", stuID, year, semester, status, err)
+		return 0, errorx.Errorf("dao.refreshLog.InsertRefreshLog: stuID=%s, year=%s, semester=%s, status=%s: %w", tool.MaskStudentID(stuID), year, semester, status, err)
 	}
 	return refreshLog.ID, nil
 }
@@ -71,7 +72,7 @@ func (r *RefreshLogDAO) SearchNewestRefreshLog(ctx context.Context, stuID, year,
 		Where("stu_id = ? and year = ? and semester = ? and updated_at < ?", stuID, year, semester, endTime).
 		Order("updated_at desc").First(&refreshLog).Error
 	if err != nil {
-		return nil, errorx.Errorf("dao.refreshLog.SearchNewestRefreshLog: stuID=%s, year=%s, semester=%s: %w", stuID, year, semester, err)
+		return nil, errorx.Errorf("dao.refreshLog.SearchNewestRefreshLog: stuID=%s, year=%s, semester=%s: %w", tool.MaskStudentID(stuID), year, semester, err)
 	}
 	return &refreshLog, nil
 }

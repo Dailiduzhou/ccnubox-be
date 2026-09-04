@@ -38,7 +38,7 @@ func NewClasserService(clu *usecase.ClassUsecase, conf *conf.ServerConf, content
 // 业务校验：CheckSY 校验学年学期格式
 func (s *ClassListService) GetClass(ctx context.Context, stuID, year, semester string, refresh bool) ([]*model.ClassInfoBO, *time.Time, error) {
 	hlog := s.log.WithContext(ctx).With(
-		logger.String("stu_id", stuID),
+		logger.String("stu_id", tool.MaskStudentID(stuID)),
 		logger.String("year", year),
 		logger.String("semester", semester),
 	)
@@ -90,7 +90,7 @@ func mapGetClassError(err error) error {
 
 func (s *ClassListService) AddClass(ctx context.Context, stuID, name, durClass, where, teacher string, weeks int64, semester, year string, day int64, credit *float64) (id, msg string, err error) {
 	logh := s.log.WithContext(ctx).With(
-		logger.String("stu_id", stuID),
+		logger.String("stu_id", tool.MaskStudentID(stuID)),
 		logger.String("year", year),
 		logger.String("semester", semester),
 	)
@@ -152,7 +152,7 @@ func (s *ClassListService) AddClass(ctx context.Context, stuID, name, durClass, 
 
 func (s *ClassListService) DeleteClass(ctx context.Context, stuID, year, semester, classID string) (string, error) {
 	logh := s.log.WithContext(ctx).With(
-		logger.String("stu_id", stuID),
+		logger.String("stu_id", tool.MaskStudentID(stuID)),
 		logger.String("year", year),
 		logger.String("semester", semester),
 		logger.String("class_id", classID),
@@ -174,7 +174,7 @@ func (s *ClassListService) DeleteClass(ctx context.Context, stuID, year, semeste
 
 func (s *ClassListService) UpdateClass(ctx context.Context, stuID, year, semester, classID string, name, durClass, where, teacher *string, weeks, day *int64, credit *float64) (string, string, error) {
 	logh := s.log.WithContext(ctx).With(
-		logger.String("stu_id", stuID),
+		logger.String("stu_id", tool.MaskStudentID(stuID)),
 		logger.String("year", year),
 		logger.String("semester", semester),
 		logger.String("class_id", classID),
@@ -213,7 +213,7 @@ func (s *ClassListService) UpdateClass(ctx context.Context, stuID, year, semeste
 
 func (s *ClassListService) UpdateClassNote(ctx context.Context, stuID, year, semester, classID, note string) (string, error) {
 	logh := s.log.WithContext(ctx).With(
-		logger.String("stu_id", stuID),
+		logger.String("stu_id", tool.MaskStudentID(stuID)),
 		logger.String("year", year),
 		logger.String("semester", semester),
 		logger.String("class_id", classID),
@@ -235,7 +235,7 @@ func (s *ClassListService) UpdateClassNote(ctx context.Context, stuID, year, sem
 
 func (s *ClassListService) DeleteClassNote(ctx context.Context, stuID, year, semester, classID string) (string, error) {
 	logh := s.log.WithContext(ctx).With(
-		logger.String("stu_id", stuID),
+		logger.String("stu_id", tool.MaskStudentID(stuID)),
 		logger.String("year", year),
 		logger.String("semester", semester),
 		logger.String("class_id", classID),
@@ -270,7 +270,7 @@ func (s *ClassListService) GetStuIdsByJxbId(ctx context.Context, jxbID string) (
 }
 
 func (s *ClassListService) GetClassNatures(ctx context.Context, stuID string) ([]string, error) {
-	logh := s.log.WithContext(ctx).With(logger.String("stu_id", stuID))
+	logh := s.log.WithContext(ctx).With(logger.String("stu_id", tool.MaskStudentID(stuID)))
 	if stuID == "" {
 		logh.Warn("get class natures param invalid")
 		return nil, ParamError(errorx.New("invalid student id"))

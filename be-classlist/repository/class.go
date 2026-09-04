@@ -5,6 +5,7 @@ import (
 
 	"github.com/asynccnu/ccnubox-be/be-classlist/biz"
 	bizModel "github.com/asynccnu/ccnubox-be/be-classlist/biz/model"
+	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/tool"
 	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/transaction"
 	repoModel "github.com/asynccnu/ccnubox-be/be-classlist/repository/model"
 	"github.com/avast/retry-go"
@@ -52,7 +53,7 @@ func (cla ClassRepo) GetClassesFromLocal(ctx context.Context, stuID, year, semes
 		classInfos, err = cla.ClaInfoDAO.GetClassInfos(ctx, stuID, year, semester)
 		if err != nil {
 			return nil, errorx.Errorf("repo.class.GetClassesFromLocal: stuID=%s, year=%s, semester=%s: %w",
-				stuID, year, semester, err)
+				tool.MaskStudentID(stuID), year, semester, err)
 		}
 
 		// 在从数据库读取数据之后，同步写入缓存
@@ -65,7 +66,7 @@ func (cla ClassRepo) GetClassesFromLocal(ctx context.Context, stuID, year, semes
 
 	if len(classInfos) == 0 {
 		return nil, errorx.Errorf("repo.class.GetClassesFromLocal: stuID=%s, year=%s, semester=%s: %w",
-			stuID, year, semester, biz.ErrClassNotFound)
+			tool.MaskStudentID(stuID), year, semester, biz.ErrClassNotFound)
 	}
 
 	classInfosBiz := make([]*bizModel.ClassInfoBO, 0, len(classInfos))
@@ -105,7 +106,7 @@ func (cla ClassRepo) AddClass(ctx context.Context, stuID, year, semester string,
 	})
 	if errTx != nil {
 		return errorx.Errorf("repo.class.AddClass: stuID=%s, year=%s, semester=%s: %w",
-			stuID, year, semester, errTx)
+			tool.MaskStudentID(stuID), year, semester, errTx)
 	}
 
 	// 缓存失效（best-effort，DB 已成功）
@@ -131,7 +132,7 @@ func (cla ClassRepo) DeleteAddedClasses(ctx context.Context, stuID, year, semest
 	})
 	if errTx != nil {
 		return errorx.Errorf("repo.class.DeleteAddedClasses: stuID=%s, year=%s, semester=%s, classIDs=%v: %w",
-			stuID, year, semester, classIDs, errTx)
+			tool.MaskStudentID(stuID), year, semester, classIDs, errTx)
 	}
 	cla.invalidateClassInfoCacheBestEffort(ctx, stuID, year, semester)
 	cla.invalidateMetaDataCacheBestEffort(ctx, stuID, year, semester)
@@ -160,7 +161,7 @@ func (cla ClassRepo) UpdateAddedClass(ctx context.Context, stuID, year, semester
 	})
 	if errTx != nil {
 		return errorx.Errorf("repo.class.UpdateAddedClass: stuID=%s, year=%s, semester=%s, oldClassID=%s, newClassID=%s: %w",
-			stuID, year, semester, oldClassID, classInfo.ID, errTx)
+			tool.MaskStudentID(stuID), year, semester, oldClassID, classInfo.ID, errTx)
 	}
 	cla.invalidateClassInfoCacheBestEffort(ctx, stuID, year, semester)
 	cla.invalidateMetaDataCacheBestEffort(ctx, stuID, year, semester)
@@ -173,7 +174,7 @@ func (cla ClassRepo) UpdateClassNote(ctx context.Context, stuID, year, semester,
 	})
 	if errTx != nil {
 		return errorx.Errorf("repo.class.UpdateClassNote: stuID=%s, year=%s, semester=%s, classID=%s: %w",
-			stuID, year, semester, classID, errTx)
+			tool.MaskStudentID(stuID), year, semester, classID, errTx)
 	}
 	cla.invalidateMetaDataCacheBestEffort(ctx, stuID, year, semester)
 	return nil
@@ -210,7 +211,7 @@ func (cla ClassRepo) SaveClass(ctx context.Context, stuID, year, semester string
 	})
 	if err != nil {
 		return errorx.Errorf("repo.class.SaveClass: stuID=%s, year=%s, semester=%s, classCount=%d: %w",
-			stuID, year, semester, len(classInfos), err)
+			tool.MaskStudentID(stuID), year, semester, len(classInfos), err)
 	}
 
 	// 缓存失效（best-effort，DB 已成功）
@@ -224,7 +225,7 @@ func (cla ClassRepo) GetAddedClasses(ctx context.Context, stuID, year, semester 
 	classInfos, err := cla.ClaInfoDAO.GetAddedClassInfos(ctx, stuID, year, semester)
 	if err != nil {
 		return nil, errorx.Errorf("repo.class.GetAddedClasses: stuID=%s, year=%s, semester=%s: %w",
-			stuID, year, semester, err)
+			tool.MaskStudentID(stuID), year, semester, err)
 	}
 
 	classInfosBiz := make([]*bizModel.ClassInfoBO, 0, len(classInfos))
@@ -241,7 +242,7 @@ func (cla ClassRepo) GetAddedClasses(ctx context.Context, stuID, year, semester 
 func (cla ClassRepo) GetClassNatures(ctx context.Context, stuID string) ([]string, error) {
 	classNatures, err := cla.ClaInfoDAO.GetClassNatures(ctx, stuID)
 	if err != nil {
-		return nil, errorx.Errorf("repo.class.GetClassNatures: stuID=%s: %w", stuID, err)
+		return nil, errorx.Errorf("repo.class.GetClassNatures: stuID=%s: %w", tool.MaskStudentID(stuID), err)
 	}
 
 	filteredNatures := make([]string, 0, len(classNatures))
@@ -270,7 +271,7 @@ func (cla ClassRepo) fillClassMetaData(ctx context.Context, stuID, year, semeste
 		if dbErr != nil {
 			// DB 失败：不污染缓存，MetaData 保持零值；repo 层就地 warn 作为业务降级观测点
 			cla.log.WithContext(ctx).Warnf("repo.class.fillClassMetaData: stuID=%s year=%s semester=%s, GetClassMetaData failed, skip cache refill: %+v",
-				stuID, year, semester, dbErr)
+				tool.MaskStudentID(stuID), year, semester, dbErr)
 			return
 		}
 
@@ -314,7 +315,7 @@ func (cla ClassRepo) invalidateClassInfoCacheBestEffort(ctx context.Context, stu
 	)
 	if err != nil {
 		cla.log.WithContext(ctx).Warnf("repo.class.invalidateClassInfoCache: stuID=%s year=%s semester=%s: %+v",
-			stuID, year, semester, err)
+			tool.MaskStudentID(stuID), year, semester, err)
 	}
 }
 
@@ -328,6 +329,6 @@ func (cla ClassRepo) invalidateMetaDataCacheBestEffort(ctx context.Context, stuI
 	)
 	if err != nil {
 		cla.log.WithContext(ctx).Warnf("repo.class.invalidateMetaDataCache: stuID=%s year=%s semester=%s: %+v",
-			stuID, year, semester, err)
+			tool.MaskStudentID(stuID), year, semester, err)
 	}
 }

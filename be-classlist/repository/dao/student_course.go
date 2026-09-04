@@ -3,6 +3,7 @@ package dao
 import (
 	"context"
 
+	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/tool"
 	"github.com/asynccnu/ccnubox-be/be-classlist/repository/model"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
@@ -45,7 +46,7 @@ func (s *StudentCourseDAO) GetClassMetaData(ctx context.Context, stuID, year, se
 		Find(&results).Error
 	if err != nil {
 		return res, errorx.Errorf("dao.studentCourse.GetClassMetaData: stuID=%s, year=%s, semester=%s, claIds=%v: %w",
-			stuID, year, semester, claIds, err)
+			tool.MaskStudentID(stuID), year, semester, claIds, err)
 	}
 
 	// 将切片结果转换为 map
@@ -74,7 +75,7 @@ func (s *StudentCourseDAO) AddedCourseExists(ctx context.Context, stuID, year, s
 	err := db.Where("stu_id = ? AND year = ? AND semester = ? AND cla_id = ?", stuID, year, semester, classID).Count(&num).Error
 	if err != nil {
 		s.log.WithContext(ctx).Error("Mysql:count student_course failed",
-			logger.String("stu_id", stuID),
+			logger.String("stu_id", tool.MaskStudentID(stuID)),
 			logger.String("year", year),
 			logger.String("semester", semester),
 			logger.String("class_id", classID),
@@ -94,8 +95,9 @@ func (s *StudentCourseDAO) SaveStudentAndCourseToDB(ctx context.Context, sc *mod
 	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 	err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(sc).Error
 	if err != nil {
-		logh.Errorf("Mysql:create %v in %s failed: %v", sc, model.StudentCourseTableName, err)
-		return errorx.Errorf("dao.studentCourse.SaveStudentAndCourseToDB: sc=%+v: %w", sc, err)
+		// 不打印整个结构体，避免学号泄露，只保留课程维度的关键字段
+		logh.Errorf("Mysql:create student_course failed: cla_id=%s year=%s semester=%s err=%v", sc.ClaID, sc.Year, sc.Semester, err)
+		return errorx.Errorf("dao.studentCourse.SaveStudentAndCourseToDB: cla_id=%s, year=%s, semester=%s: %w", sc.ClaID, sc.Year, sc.Semester, err)
 	}
 	return nil
 }
@@ -110,7 +112,8 @@ func (s *StudentCourseDAO) SaveManyStudentAndCourseToDB(ctx context.Context, scs
 	db := s.GetDB(ctx).Table(model.StudentCourseTableName)
 
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(scs).Error; err != nil {
-		logh.Errorf("Mysql:create %v in %s failed: %v", scs, model.StudentCourseTableName, err)
+		// 不打印整个切片，避免学号泄露，只保留数量
+		logh.Errorf("Mysql:create %d student_course in %s failed: %v", len(scs), model.StudentCourseTableName, err)
 		return errorx.Errorf("dao.studentCourse.SaveManyStudentAndCourseToDB: count=%d: %w", len(scs), err)
 	}
 	return nil
@@ -123,7 +126,7 @@ func (s *StudentCourseDAO) DeleteStudentAndCourseByTimeFromDB(ctx context.Contex
 	err := db.Where("year = ? AND semester = ? AND stu_id = ? AND is_manually_added = false", year, semester, stuID).Delete(&model.StudentCourse{}).Error
 	if err != nil {
 		logh.Errorf("Mysql:delete student_course by time from db failed: %v", err)
-		return errorx.Errorf("dao.studentCourse.DeleteStudentAndCourseByTimeFromDB: stuID=%s, year=%s, semester=%s: %w", stuID, year, semester, err)
+		return errorx.Errorf("dao.studentCourse.DeleteStudentAndCourseByTimeFromDB: stuID=%s, year=%s, semester=%s: %w", tool.MaskStudentID(stuID), year, semester, err)
 	}
 	return nil
 }
@@ -139,8 +142,8 @@ func (s *StudentCourseDAO) DeleteAddedStudentCourses(ctx context.Context, stuID,
 		Where("stu_id = ? AND year = ? AND semester = ? AND is_manually_added = true AND cla_id IN ?", stuID, year, semester, classIDs).
 		Delete(&model.StudentCourse{}).Error
 	if err != nil {
-		logh.Errorf("Mysql:delete added student_course failed: stuID=%s year=%s semester=%s classIDs=%v err=%v", stuID, year, semester, classIDs, err)
-		return errorx.Errorf("dao.studentCourse.DeleteAddedStudentCourses: stuID=%s, year=%s, semester=%s, classIDs=%v: %w", stuID, year, semester, classIDs, err)
+		logh.Errorf("Mysql:delete added student_course failed: stuID=%s year=%s semester=%s classIDs=%v err=%v", tool.MaskStudentID(stuID), year, semester, classIDs, err)
+		return errorx.Errorf("dao.studentCourse.DeleteAddedStudentCourses: stuID=%s, year=%s, semester=%s, classIDs=%v: %w", tool.MaskStudentID(stuID), year, semester, classIDs, err)
 	}
 	return nil
 }
@@ -152,8 +155,8 @@ func (s *StudentCourseDAO) UpdateCourseNote(ctx context.Context, stuID, year, se
 		Where("stu_id = ? AND year = ? AND semester = ? AND cla_id = ?", stuID, year, semester, classID).
 		Update("note", note).Error
 	if err != nil {
-		logh.Errorf("Mysql:update course note failed: stuID=%s year=%s semester=%s classID=%s err=%v", stuID, year, semester, classID, err)
-		return errorx.Errorf("dao.studentCourse.UpdateCourseNote: stuID=%s, year=%s, semester=%s, classID=%s: %w", stuID, year, semester, classID, err)
+		logh.Errorf("Mysql:update course note failed: stuID=%s year=%s semester=%s classID=%s err=%v", tool.MaskStudentID(stuID), year, semester, classID, err)
+		return errorx.Errorf("dao.studentCourse.UpdateCourseNote: stuID=%s, year=%s, semester=%s, classID=%s: %w", tool.MaskStudentID(stuID), year, semester, classID, err)
 	}
 	return nil
 }

@@ -119,7 +119,7 @@ func (c *DelaySendHandler) processMessage(session sarama.ConsumerGroupSession, m
 			return true
 		}
 
-		tlog.Errorf("Error forwarding message: %s: %v", string(message.Value), err)
+		tlog.Errorf("Error forwarding message: %v", err)
 		span.RecordError(err)
 		if c.mqFailedTotal != nil {
 			c.mqFailedTotal.WithLabelValues(c.topic, classifyError(err)).Inc()

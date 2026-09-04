@@ -3,6 +3,7 @@ package dao
 import (
 	"context"
 
+	"github.com/asynccnu/ccnubox-be/be-classlist/pkg/tool"
 	"github.com/asynccnu/ccnubox-be/be-classlist/repository/model"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
@@ -36,7 +37,7 @@ func (j *JxbDAO) SaveJxb(ctx context.Context, stuID string, jxbID []string) erro
 	}
 
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&jxb).Error; err != nil {
-		return errorx.Errorf("dao.jxb.SaveJxb: stuID=%s, jxbIDs=%v, table=%s: %w", stuID, jxbID, model.JxbTableName, err)
+		return errorx.Errorf("dao.jxb.SaveJxb: stuID=%s, jxbIDs=%v, table=%s: %w", tool.MaskStudentID(stuID), jxbID, model.JxbTableName, err)
 	}
 	return nil
 }
