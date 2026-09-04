@@ -42,6 +42,7 @@ func InitApp() App {
 		ioc.InitProxyClient,
 		ioc.InitHttpProxyClient,
 		ioc.InitSecret,
+		ioc.InitOTel,
 		ioc.InitShutdown,
 		NewApp,
 	)

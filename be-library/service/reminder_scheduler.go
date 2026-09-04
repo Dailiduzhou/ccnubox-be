@@ -121,13 +121,29 @@ func (s *ReminderScheduler) run(name string, fn func(context.Context) error) {
 	s.runTask(ctx, name, fn)
 }
 
-// runTask 为 cron 和固定间隔任务统一设置单次执行边界。
-// 超时依赖下游遵守 context，无法强制终止忽略取消信号的调用。
-func (s *ReminderScheduler) runTask(parent context.Context, name string, fn func(context.Context) error) {
-	taskCtx, cancel := context.WithTimeout(parent, reminderTaskTimeout)
+// runTask 为 cron 和固定间隔任务统一设置单次执行边界与任务入口 Span。
+// trigger 仅使用 cron 或 loop；超时依赖下游遵守 context，无法强制终止忽略取消信号的调用。
+func (s *ReminderScheduler) runTask(parent context.Context, trigger, name string, fn func(context.Context) error) {
+	tracer := otel.Tracer("be-library")
+	ctx, span := tracer.Start(parent, "library.reminder."+name,
+		trace.WithAttributes(
+			attribute.String("task.name", name),
+			attribute.String("task.trigger", trigger),
+			attribute.Int64("task.timeout_ms", reminderTaskTimeout.Milliseconds()),
+		))
+	defer span.End()
+	taskCtx, cancel := context.WithTimeout(ctx, reminderTaskTimeout)
 	defer cancel()
 	if err := fn(taskCtx); err != nil && parent.Err() == nil {
-		s.logger.Warn("library reminder task failed", logger.String("task", name), logger.Error(err))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		fields := []logger.Field{logger.String("task", name), logger.String("trigger", trigger)}
+		var batch *subscriptionBatchError
+		if errors.As(err, &batch) {
+			fields = append(fields, batch.LogFields()...)
+		}
+		fields = append(fields, logger.Error(err))
+		s.logger.WithContext(taskCtx).Warn("library reminder task failed", fields...)
 	}
 }
 

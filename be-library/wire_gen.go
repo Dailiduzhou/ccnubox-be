@@ -43,7 +43,8 @@ func InitApp() App {
 	feedGateway := ioc.InitReminderFeedGateway(feedServiceClient, logger)
 	reminderService := service.NewReminderService(reminderDAO, reminderCrawler, userServiceClient, feedGateway, serverConf, metrics, logger)
 	reminderScheduler := service.NewReminderScheduler(reminderService, logger)
-	v := ioc.InitShutdown(db, client)
+	oTelShutdownFunc := ioc.InitOTel(infraConf)
+	v := ioc.InitShutdown(oTelShutdownFunc, db, client)
 	app := NewApp(server, metricsxServer, reminderScheduler, v)
 	return app
 }
