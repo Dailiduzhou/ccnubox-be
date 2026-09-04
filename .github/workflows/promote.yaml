@@ -1,0 +1,82 @@
+name: Promote to Production
+
+on:
+  push:
+    tags:
+      - 'promote-*'
+
+permissions:
+  contents: read
+
+# A promote run must not interleave with a main-branch deploy: both rewrite
+# state on the host (.env, docker login). They share one remote flock, so a
+# promote waits for any in-flight deploy (and vice versa).
+concurrency:
+  group: ccnubox-prod-promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.repository == 'asynccnu/ccnubox-be'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH key
+        env:
+          SERVER_ADDR: ${{ secrets.SERVER_ADDR }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$SERVER_ADDR" >> ~/.ssh/known_hosts
+
+      - name: Sync production to preview versions
+        env:
+          SERVER_ADDR: ${{ secrets.SERVER_ADDR }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+          REGISTRY_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+          REGISTRY_USER: ${{ secrets.ALIYUN_USERNAME }}
+        run: |
+          set -euo pipefail
+
+          registry_b64="$(printf '%s' "$REGISTRY" | base64 -w 0)"
+          registry_user_b64="$(printf '%s' "$REGISTRY_USER" | base64 -w 0)"
+          registry_password_b64="$(printf '%s' "$REGISTRY_PASSWORD" | base64 -w 0)"
+
+          {
+            printf "REGISTRY_B64='%s'\n" "$registry_b64"
+            printf "REGISTRY_USER_B64='%s'\n" "$registry_user_b64"
+            printf "REGISTRY_PASSWORD_B64='%s'\n" "$registry_password_b64"
+            cat << 'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          REGISTRY="$(printf '%s' "$REGISTRY_B64" | base64 -d)"
+          REGISTRY_USER="$(printf '%s' "$REGISTRY_USER_B64" | base64 -d)"
+          REGISTRY_PASSWORD="$(printf '%s' "$REGISTRY_PASSWORD_B64" | base64 -d)"
+
+          (
+            # Same lock as the deploy workflow: .env and docker login state
+            # must never be touched concurrently.
+            flock -x 200
+            cd ~/ccnubox_v3
+
+            # No builds here. Mirror the image tags verified on preview and
+            # restart production with them. Services whose tag is unchanged
+            # are no-ops for `docker compose up -d`.
+            cp ~/ccnubox-preview/.env ./.env
+
+            echo "$REGISTRY_PASSWORD" | docker login \
+              --username="$REGISTRY_USER" \
+              --password-stdin \
+              "$REGISTRY"
+
+            docker compose pull
+            docker compose up -d
+            docker image prune -a -f --filter "until=24h"
+
+            echo 'Production versions now:'
+            cat ./.env
+          ) 200>/tmp/ccnubox_deploy.lock
+          REMOTE_SCRIPT
+          } | ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_ADDR" bash -s
