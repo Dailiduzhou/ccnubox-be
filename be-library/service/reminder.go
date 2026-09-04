@@ -41,6 +41,10 @@ const (
 	reservationStatusMaxBytes   = 32
 	notificationMessageMaxBytes = 8 << 10
 	claimReleaseTimeout         = 5 * time.Second
+
+	// 上游失败消息可达 4 MiB，批量样例只保留固定上限的截断文本，
+	// 避免完整错误链随批量错误常驻内存并重复写入日志。
+	subscriptionErrorSampleMaxBytes = 4 << 10
 )
 
 type notificationPayload struct {
@@ -287,7 +291,7 @@ func (s *ReminderService) CalibratePreferences(ctx context.Context) error {
 	var baselineErr error
 	if s.config.ShouldBaselineOnEnable() {
 		if err := s.forEachSubscription(ctx, enabled, s.RefreshUser); err != nil {
-			return fmt.Errorf("calibrate baseline batch: %w", err)
+			baselineErr = fmt.Errorf("calibrate baseline batch: %w", err)
 		}
 	}
 	// 释放互斥锁前重放与分页全量查询并发的变更，消除全量快照与增量变更的顺序间隙。
@@ -369,7 +373,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, libraryTokenFailureStatus(err))
-		return stageFailure(err, "get_library_token", "token_rpc")
+		return stageFailure(ctx, err, "get_library_token", "token_rpc")
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
 		return err
@@ -377,7 +381,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	today, err := s.crawler.GetTodayReservations(ctx, token)
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
-		return stageFailure(err, "get_today_reservations", upstreamFailureKind(err))
+		return stageFailure(ctx, err, "get_today_reservations", upstreamFailureKind(err))
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
 		return err
@@ -389,7 +393,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	history, err := s.crawler.GetRecentHistory(ctx, token, crawler.HistoryWatermark{ReservationID: watermark})
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
-		return stageFailure(err, "get_recent_history", upstreamFailureKind(err))
+		return stageFailure(ctx, err, "get_recent_history", upstreamFailureKind(err))
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
 		return err
@@ -397,7 +401,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 	state, err := s.crawler.GetUserState(ctx, token)
 	if err != nil {
 		_ = s.dao.MarkRefreshFailure(ctx, sub.StudentID, sub.PreferenceVersion, dao.SubscriptionAuthUpstreamUnknown)
-		return stageFailure(err, "get_user_state", upstreamFailureKind(err))
+		return stageFailure(ctx, err, "get_user_state", upstreamFailureKind(err))
 	}
 	// 部分历史分页可安全用于更新插入和新增事实，但不能据此执行“缺失即取消”的状态转换。
 	reservations := make(map[string]crawler.ReminderReservation, len(today)+len(history.Reservations))
@@ -428,7 +432,7 @@ func (s *ReminderService) refreshUserAttempt(ctx context.Context, sub dao.Librar
 		}
 		return txDAO.MarkBaseline(ctx, sub.StudentID, now, dao.SubscriptionAuthOK)
 	}); err != nil {
-		return stageFailure(err, "save_reservation_state", "database")
+		return stageFailure(ctx, err, "save_reservation_state", "database")
 	}
 	return nil
 }
@@ -560,14 +564,14 @@ func (s *ReminderService) scanActiveUserAttempt(ctx context.Context, sub dao.Lib
 	}
 	token, err := s.libraryToken(ctx, sub.StudentID)
 	if err != nil {
-		return stageFailure(err, "get_library_token", "token_rpc")
+		return stageFailure(ctx, err, "get_library_token", "token_rpc")
 	}
 	if current, err := s.subscriptionStillCurrent(ctx, sub); err != nil || !current {
 		return err
 	}
 	current, err := s.crawler.GetCurrentReservation(ctx, token)
 	if err != nil {
-		return stageFailure(err, "get_current_reservation", upstreamFailureKind(err))
+		return stageFailure(ctx, err, "get_current_reservation", upstreamFailureKind(err))
 	}
 	now := s.now()
 	if err := s.dao.Transaction(ctx, func(txDAO *dao.ReminderDAO) error {
@@ -582,7 +586,7 @@ func (s *ReminderService) scanActiveUserAttempt(ctx context.Context, sub dao.Lib
 		txService.dao = txDAO
 		return txService.applyActiveObservation(ctx, *locked, current, now)
 	}); err != nil {
-		return stageFailure(err, "save_active_observation", "database")
+		return stageFailure(ctx, err, "save_active_observation", "database")
 	}
 	return nil
 }
@@ -1195,13 +1199,16 @@ func (e *refreshFailure) Error() string {
 
 func (e *refreshFailure) Unwrap() error { return e.err }
 
-// stageFailure 包装刷新链路错误，并优先按 context 覆盖错误分类，
-// 使批量汇总能区分超时/取消与具体阶段错误。
-func stageFailure(err error, stage, kind string) error {
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
+// stageFailure 包装刷新链路错误，仅当父操作本身已取消或过期时才覆盖分类。
+// 上游请求自身的超时（remoteCallContext 的 8 秒上限）错误链同样匹配
+// context.DeadlineExceeded/Canceled，但父 ctx 仍存活，必须保留 upstreamFailureKind
+// 或阶段固有的分类，否则 upstream_timeout 不可达，无法与调度任务的 25 分钟
+// 截止或关闭取消区分。
+func stageFailure(ctx context.Context, err error, stage, kind string) error {
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
 		kind = "context_deadline"
-	case errors.Is(err, context.Canceled):
+	case context.Canceled:
 		kind = "context_canceled"
 	}
 	return &refreshFailure{stage: stage, kind: kind, err: err}
@@ -1226,6 +1233,33 @@ func upstreamFailureKind(err error) string {
 	}
 }
 
+// gormDatabaseErrors 为可归为 database 分类的 gorm 常规错误，
+// 供 fallback 分类未附着 refreshFailure 信息的普通数据库失败。
+var gormDatabaseErrors = []error{
+	gorm.ErrRecordNotFound,
+	gorm.ErrInvalidTransaction,
+	gorm.ErrNotImplemented,
+	gorm.ErrMissingWhereClause,
+	gorm.ErrUnsupportedRelation,
+	gorm.ErrPrimaryKeyRequired,
+	gorm.ErrModelValueRequired,
+	gorm.ErrModelAccessibleFieldsRequired,
+	gorm.ErrSubQueryRequired,
+	gorm.ErrInvalidData,
+	gorm.ErrUnsupportedDriver,
+	gorm.ErrRegistered,
+	gorm.ErrInvalidField,
+	gorm.ErrEmptySlice,
+	gorm.ErrDryRunModeUnsupported,
+	gorm.ErrInvalidDB,
+	gorm.ErrInvalidValue,
+	gorm.ErrInvalidValueOfLength,
+	gorm.ErrPreloadNotAllowed,
+	gorm.ErrDuplicatedKey,
+	gorm.ErrForeignKeyViolated,
+	gorm.ErrCheckConstraintViolated,
+}
+
 // classifyFallbackFailure 为未附着阶段信息的错误给出低基数分类。
 func classifyFallbackFailure(err error) string {
 	switch {
@@ -1233,14 +1267,13 @@ func classifyFallbackFailure(err error) string {
 		return "context_deadline"
 	case errors.Is(err, context.Canceled):
 		return "context_canceled"
-	case errors.Is(err, gorm.ErrRecordNotFound),
-		errors.Is(err, gorm.ErrDuplicatedKey),
-		errors.Is(err, gorm.ErrInvalidTransaction),
-		errors.Is(err, gorm.ErrNotImplemented):
-		return "database"
-	default:
-		return "unknown"
 	}
+	for _, dbErr := range gormDatabaseErrors {
+		if errors.Is(err, dbErr) {
+			return "database"
+		}
+	}
+	return "unknown"
 }
 
 // refreshFailureInfo 从错误中提取阶段与分类；未附着 refreshFailure 时给出回退分类。
@@ -1255,10 +1288,11 @@ func refreshFailureInfo(err error) (stage, kind string) {
 const batchErrorSampleLimit = 20
 
 // subscriptionFailure 保留批量刷新中的单条失败样例，StudentID 必须已脱敏。
+// ErrText 只保存固定上限的截断文本；原始错误仅保留一份在 batch.Cause。
 type subscriptionFailure struct {
 	StudentID string
 	Stage     string
-	Err       error
+	ErrText   string
 }
 
 // subscriptionBatchError 汇总批量订阅刷新的结果与分类计数，避免用 errors.Join 拼接
@@ -1272,7 +1306,8 @@ type subscriptionBatchError struct {
 	Canceled  int
 	Groups    map[string]int
 	Samples   []subscriptionFailure
-	Cause     error
+	// Cause 保留首个失败的原始错误（不受样例截断影响），供 Unwrap 保持 errors.Is 语义。
+	Cause error
 }
 
 func (e *subscriptionBatchError) Error() string {
@@ -1288,7 +1323,7 @@ func (e *subscriptionBatchError) SampleLogs() []map[string]string {
 		samples = append(samples, map[string]string{
 			"student_id": sample.StudentID,
 			"stage":      sample.Stage,
-			"error":      sample.Err.Error(),
+			"error":      sample.ErrText,
 		})
 	}
 	return samples
@@ -1330,6 +1365,8 @@ launch:
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
+			// 必须退出外层循环：仅跳出 select 会继续启动未取得 token 的
+			// goroutine，其 defer 的 <-sem 将永久阻塞，wg.Wait() 无法返回。
 			launchErr = ctx.Err()
 			break launch
 		}
@@ -1344,8 +1381,12 @@ launch:
 				mu.Lock()
 				batch.Failed++
 				batch.Groups[kind]++
+				if batch.Cause == nil {
+					// 代表性失败：仅用于 errors.Is 判断，不展开全部用户错误。
+					batch.Cause = err
+				}
 				if len(batch.Samples) < batchErrorSampleLimit {
-					batch.Samples = append(batch.Samples, subscriptionFailure{StudentID: maskStudentID(row.StudentID), Stage: stage, Err: err})
+					batch.Samples = append(batch.Samples, subscriptionFailure{StudentID: maskStudentID(row.StudentID), Stage: stage, ErrText: truncateUTF8(err.Error(), subscriptionErrorSampleMaxBytes)})
 				}
 				mu.Unlock()
 			}
@@ -1358,10 +1399,8 @@ launch:
 		return nil
 	}
 	if launchErr != nil {
+		// 取消/超时优先：覆盖首个失败的 Cause，避免 errors.Is 误判为具体用户错误。
 		batch.Cause = launchErr
-	} else if len(batch.Samples) > 0 {
-		// 代表性失败：仅用于 errors.Is 判断，不展开全部用户错误。
-		batch.Cause = batch.Samples[0].Err
 	}
 	return batch
 }
