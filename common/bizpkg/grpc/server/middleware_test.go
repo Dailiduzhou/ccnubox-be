@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	ccnuv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/ccnu/v1"
 	feedv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/feed/v1"
 	libraryv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/library/v1"
+	userv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/user/v1"
 )
 
 func TestInvitationRequestLogsAreRedacted(t *testing.T) {
@@ -20,5 +22,23 @@ func TestInvitationRequestLogsAreRedacted(t *testing.T) {
 	}
 	if requestLogValue("ordinary") != "ordinary" {
 		t.Fatal("ordinary request logging changed")
+	}
+}
+
+func TestAuthenticationRequestLogsAreRedacted(t *testing.T) {
+	for _, req := range []any{
+		&ccnuv1.GetXKCookieRequest{Password: "private-password"},
+		&ccnuv1.CheckXKCookieRequest{Cookie: "private-cookie"},
+		&ccnuv1.LoginCCNURequest{Password: "private-password"},
+		&ccnuv1.GetLibraryTokenRequest{Password: "private-password"},
+		&ccnuv1.CheckLibraryTokenRequest{Token: "private-token"},
+		&userv1.SaveUserReq{Password: "private-password"},
+		&userv1.CheckUserReq{Password: "private-password"},
+		&userv1.DeleteUserReq{Password: "private-password"},
+	} {
+		value := requestLogValue(req)
+		if !strings.HasPrefix(value, "[REDACTED:") || strings.Contains(value, "private") {
+			t.Fatalf("unsafe credential log: %s", value)
+		}
 	}
 }

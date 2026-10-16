@@ -6,8 +6,10 @@ import (
 	"strings"
 	"time"
 
+	ccnuv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/ccnu/v1"
 	feedv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/feed/v1"
 	libraryv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/library/v1"
+	userv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/user/v1"
 	"github.com/asynccnu/ccnubox-be/common/pkg/errorx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
 	"github.com/go-kratos/kratos/v2/middleware"
@@ -88,9 +90,13 @@ func HealthMiddleware(hs *health.Server) middleware.Middleware {
 	}
 }
 
-// 邀请请求含收件人列表，成功和失败均不能将其写入通用 RPC 日志。
+// 认证请求含凭据，邀请请求含收件人列表，成功和失败均不能写入通用 RPC 日志。
 func requestLogValue(req any) string {
 	switch value := req.(type) {
+	case *ccnuv1.GetXKCookieRequest, *ccnuv1.CheckXKCookieRequest,
+		*ccnuv1.LoginCCNURequest, *ccnuv1.GetLibraryTokenRequest, *ccnuv1.CheckLibraryTokenRequest,
+		*userv1.SaveUserReq, *userv1.CheckUserReq, *userv1.DeleteUserReq:
+		return "[REDACTED: authentication credentials]"
 	case *libraryv1.NotifyTeamInvitationRequest:
 		return "[REDACTED: team invitation]"
 	case *feedv1.PublicFeedEventReq:
