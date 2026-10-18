@@ -1571,52 +1571,30 @@ paths:
         - grade
   /grade/getRankByTerm:
     get:
-      description: 根据学年号和学期号获取用户的学分绩排名以及分数和统计的科目，全为0则查总排名
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/grade.GetRankByTermReq"
-        description: 获取学年和学期的学分绩排名请求参数
-        required: true
+      deprecated: true
+      description: 兼容旧客户端，固定返回功能已下线，不再查询校方排名
       responses:
-        "200":
-          description: 成功返回学年和学期的排名信息
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/web.Response"
-                  - properties:
-                      data:
-                        $ref: "#/components/schemas/grade.GetRankByTermResp"
-                    type: object
-        "409":
-          description: 统一身份认证账户尚未初始化，code=40603
+        "410":
+          description: 排名功能已下线，code=41001
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/web.Response"
-        "500":
-          description: 系统异常，获取失败
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/web.Response"
-      summary: 查询学分绩排名
+      summary: 查询学分绩排名（已下线）
       tags:
         - grade
   /grade/loadRank:
     get:
-      description: 当用户点开app时前端发现从未预加载过，调用该接口预加载总排名，每个用户只需调用一次即可
+      deprecated: true
+      description: 兼容旧客户端，固定返回功能已下线，不再启动预加载
       responses:
-        "200":
-          description: 返回信息
+        "410":
+          description: 排名功能已下线，code=41001
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/web.Response"
-      summary: 预加载总排名
+      summary: 预加载总排名（已下线）
       tags:
         - grade
   /health/live:
@@ -3678,31 +3656,6 @@ components:
             type: string
           type: array
       type: object
-    grade.GetRankByTermReq:
-      properties:
-        refresh:
-          type: boolean
-        xnm_begin:
-          description: 学年学期四个字段为空则获取总成绩
-          type: integer
-        xnm_end:
-          type: integer
-        xqm_begin:
-          type: integer
-        xqm_end:
-          type: integer
-      type: object
-    grade.GetRankByTermResp:
-      properties:
-        include:
-          items:
-            type: string
-          type: array
-        rank:
-          type: string
-        score:
-          type: string
-      type: object
     grade.Grade:
       properties:
         Kclbmc:
@@ -3837,37 +3790,6 @@ components:
         username:
           type: string
       type: object
-    library.CreditPoints:
-      properties:
-        records:
-          items:
-            $ref: "#/components/schemas/library.CreditRecord"
-          type: array
-        summary:
-          $ref: "#/components/schemas/library.CreditSummary"
-      type: object
-    library.CreditRecord:
-      properties:
-        location:
-          description: 地点及备注
-          type: string
-        subtitle:
-          description: 扣分及时间
-          type: string
-        title:
-          description: 原因标题
-          type: string
-      type: object
-    library.CreditSummary:
-      properties:
-        remain:
-          type: string
-        system:
-          description: 个人预约制度
-          type: string
-        total:
-          type: string
-      type: object
     library.DisableTime:
       properties:
         end:
@@ -3898,11 +3820,6 @@ components:
           type: string
         start:
           type: string
-      type: object
-    library.GetCreditPointResponse:
-      properties:
-        creditPoints:
-          $ref: "#/components/schemas/library.CreditPoints"
       type: object
     library.GetDiscussionRequest:
       properties:
@@ -4053,25 +3970,6 @@ components:
         stu_id:
           type: string
       type: object
-    library.ReserveDiscussionRequest:
-      properties:
-        dev_id:
-          type: string
-        end:
-          type: string
-        kind_id:
-          type: string
-        lab_id:
-          type: string
-        list:
-          items:
-            type: string
-          type: array
-        start:
-          type: string
-        title:
-          type: string
-      type: object
     library.ReserveSeatRandomlyRequest:
       properties:
         end:
@@ -4116,22 +4014,6 @@ components:
           items:
             $ref: "#/components/schemas/library.Seat"
           type: array
-      type: object
-    library.Search:
-      properties:
-        Pid:
-          type: string
-        id:
-          type: string
-        label:
-          type: string
-        name:
-          type: string
-      type: object
-    library.SearchUserResponse:
-      properties:
-        search:
-          $ref: "#/components/schemas/library.Search"
       type: object
     library.Seat:
       properties:

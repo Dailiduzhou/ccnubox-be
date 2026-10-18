@@ -98,6 +98,7 @@ var (
 
 // --- Grade ---
 var (
+	RANK_OFFLINE_ERROR      = errorx.FormatErrorFunc(b_errorx.New(http.StatusGone, RANK_OFFLINE_ERROR_CODE, "排名功能已下线"))
 	GET_GRADE_BY_TERM_ERROR = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_GRADE_BY_TERM_ERROR_CODE, "按学期获取成绩失败!"))
 	GET_GRADE_SCORE_ERROR   = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_GRADE_SCORE_ERROR_CODE, "获取成绩分数失败!"))
 	GET_RANK_BY_TERM_ERROR  = errorx.FormatErrorFunc(b_errorx.New(http.StatusInternalServerError, GET_RANK_BY_TERM_ERROR_CODE, "获取学分绩排名失败!"))

@@ -8,9 +8,3 @@ type GetRankByTermReq struct {
 	XqmEnd   int64 `json:"xqm_end"`
 	Refresh  bool  `json:"refresh"`
 }
-
-type GetRankByTermResp struct {
-	Rank    string   `json:"rank"`
-	Score   string   `json:"score"`
-	Include []string `json:"include"`
-}

@@ -14,6 +14,7 @@ const (
 	CLASS_SCHEDULE_CONFLICT_ERROR_CODE              = 40601 // class
 	CLASS_ALREADY_EXISTS_ERROR_CODE                 = 40602 // class
 	CCNU_ACCOUNT_INITIALIZATION_REQUIRED_ERROR_CODE = 40603 // CCNU account
+	RANK_OFFLINE_ERROR_CODE                         = 41001
 	AUTH_EXPIRED_ERROR_CODE                         = 41401 // auth
 )
 

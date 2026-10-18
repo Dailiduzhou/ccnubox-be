@@ -1,81 +1,34 @@
 package grade
 
 import (
-	"log"
+	"errors"
 
 	"github.com/asynccnu/ccnubox-be/bff/errs"
 	"github.com/asynccnu/ccnubox-be/bff/web"
 	"github.com/asynccnu/ccnubox-be/bff/web/ijwt"
-	v1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/grade/v1"
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	DefaultXnmBegin = 2005 //查询范围开始为2005年
-	DefaultXnmEnd   = 2100 //查询范围直到2100年
-	DefaultXqmBegin = 1
-	DefaultXqmEnd   = 3
-)
-
-// GetRankByTerm 查询学分绩排名
-// @Summary 查询学分绩排名
-// @Description 根据学年号和学期号获取用户的学分绩排名以及分数和统计的科目，全为0则查总排名
+// GetRankByTerm 查询学分绩排名（已下线）
+// @Summary 查询学分绩排名（已下线）
+// @Description 兼容旧客户端，固定返回功能已下线，不再查询校方排名
 // @Tags grade
-// @Accept json
 // @Produce json
-// @Param data body GetRankByTermReq  true "获取学年和学期的学分绩排名请求参数"
-// @Success 200 {object} web.Response{data=GetRankByTermResp} "成功返回学年和学期的排名信息"
-// @Failure 409 {object} web.Response "统一身份认证账户尚未初始化，code=40603"
-// @Failure 500 {object} web.Response "系统异常，获取失败"
+// @Failure 410 {object} web.Response "排名功能已下线，code=41001"
+// @Deprecated
 // @Router /grade/getRankByTerm [get]
 func (h *GradeHandler) GetRankByTerm(ctx *gin.Context, req GetRankByTermReq, uc ijwt.UserClaims) (web.Response, error) {
-	// 为0则查全学期总排名
-	if req.XnmBegin == 0 {
-		req.XqmBegin = DefaultXqmBegin
-		req.XqmEnd = DefaultXqmEnd
-		req.XnmEnd = DefaultXnmEnd
-		req.XnmBegin = DefaultXnmBegin
-	}
-
-	rank, err := h.GradeClient.GetRankByTerm(ctx, &v1.GetRankByTermReq{
-		StudentId: uc.StudentId,
-		XnmBegin:  req.XnmBegin,
-		XnmEnd:    req.XnmEnd,
-		XqmBegin:  req.XqmBegin,
-		XqmEnd:    req.XqmEnd,
-		Refresh:   req.Refresh,
-	})
-
-	if err != nil {
-		log.Println(err)
-		return web.Response{}, mapGradeError(err, errs.GET_RANK_BY_TERM_ERROR)
-	}
-
-	resp := &v1.GetRankByTermResp{
-		Score:   rank.Score,
-		Rank:    rank.Rank,
-		Include: rank.Include,
-	}
-	return web.Response{
-		Msg:  "获取排名成功",
-		Data: resp,
-	}, nil
+	return web.Response{}, errs.RANK_OFFLINE_ERROR(errors.New("排名功能已下线"))
 }
 
-// LoadRank 预加载学分绩排名
-// @Summary 预加载总排名
-// @Description 当用户点开app时前端发现从未预加载过，调用该接口预加载总排名，每个用户只需调用一次即可
+// LoadRank 预加载学分绩排名（已下线）
+// @Summary 预加载总排名（已下线）
+// @Description 兼容旧客户端，固定返回功能已下线，不再启动预加载
 // @Tags grade
 // @Produce json
-// @Success 200 {object} web.Response "返回信息"
+// @Failure 410 {object} web.Response "排名功能已下线，code=41001"
+// @Deprecated
 // @Router /grade/loadRank [get]
 func (h *GradeHandler) LoadRank(ctx *gin.Context, uc ijwt.UserClaims) (web.Response, error) {
-	// 无需处理错误
-	h.GradeClient.LoadRank(ctx, &v1.LoadRankReq{
-		StudentId: uc.StudentId,
-	})
-
-	return web.Response{
-		Msg: "预加载排名操作成功开启",
-	}, nil
+	return web.Response{}, errs.RANK_OFFLINE_ERROR(errors.New("排名功能已下线"))
 }

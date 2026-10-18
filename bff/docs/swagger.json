@@ -2340,55 +2340,18 @@
         },
         "/grade/getRankByTerm": {
             "get": {
-                "description": "根据学年号和学期号获取用户的学分绩排名以及分数和统计的科目，全为0则查总排名",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "兼容旧客户端，固定返回功能已下线，不再查询校方排名",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "grade"
                 ],
-                "summary": "查询学分绩排名",
-                "parameters": [
-                    {
-                        "description": "获取学年和学期的学分绩排名请求参数",
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/grade.GetRankByTermReq"
-                        }
-                    }
-                ],
+                "summary": "查询学分绩排名（已下线）",
+                "deprecated": true,
                 "responses": {
-                    "200": {
-                        "description": "成功返回学年和学期的排名信息",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/web.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/grade.GetRankByTermResp"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "409": {
-                        "description": "统一身份认证账户尚未初始化，code=40603",
-                        "schema": {
-                            "$ref": "#/definitions/web.Response"
-                        }
-                    },
-                    "500": {
-                        "description": "系统异常，获取失败",
+                    "410": {
+                        "description": "排名功能已下线，code=41001",
                         "schema": {
                             "$ref": "#/definitions/web.Response"
                         }
@@ -2398,17 +2361,18 @@
         },
         "/grade/loadRank": {
             "get": {
-                "description": "当用户点开app时前端发现从未预加载过，调用该接口预加载总排名，每个用户只需调用一次即可",
+                "description": "兼容旧客户端，固定返回功能已下线，不再启动预加载",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "grade"
                 ],
-                "summary": "预加载总排名",
+                "summary": "预加载总排名（已下线）",
+                "deprecated": true,
                 "responses": {
-                    "200": {
-                        "description": "返回信息",
+                    "410": {
+                        "description": "排名功能已下线，code=41001",
                         "schema": {
                             "$ref": "#/definitions/web.Response"
                         }
@@ -5433,44 +5397,6 @@
                 }
             }
         },
-        "grade.GetRankByTermReq": {
-            "type": "object",
-            "properties": {
-                "refresh": {
-                    "type": "boolean"
-                },
-                "xnm_begin": {
-                    "description": "学年学期四个字段为空则获取总成绩",
-                    "type": "integer"
-                },
-                "xnm_end": {
-                    "type": "integer"
-                },
-                "xqm_begin": {
-                    "type": "integer"
-                },
-                "xqm_end": {
-                    "type": "integer"
-                }
-            }
-        },
-        "grade.GetRankByTermResp": {
-            "type": "object",
-            "properties": {
-                "include": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "rank": {
-                    "type": "string"
-                },
-                "score": {
-                    "type": "string"
-                }
-            }
-        },
         "grade.Grade": {
             "type": "object",
             "required": [
@@ -5655,52 +5581,6 @@
                 }
             }
         },
-        "library.CreditPoints": {
-            "type": "object",
-            "properties": {
-                "records": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/library.CreditRecord"
-                    }
-                },
-                "summary": {
-                    "$ref": "#/definitions/library.CreditSummary"
-                }
-            }
-        },
-        "library.CreditRecord": {
-            "type": "object",
-            "properties": {
-                "location": {
-                    "description": "地点及备注",
-                    "type": "string"
-                },
-                "subtitle": {
-                    "description": "扣分及时间",
-                    "type": "string"
-                },
-                "title": {
-                    "description": "原因标题",
-                    "type": "string"
-                }
-            }
-        },
-        "library.CreditSummary": {
-            "type": "object",
-            "properties": {
-                "remain": {
-                    "type": "string"
-                },
-                "system": {
-                    "description": "个人预约制度",
-                    "type": "string"
-                },
-                "total": {
-                    "type": "string"
-                }
-            }
-        },
         "library.DisableTime": {
             "type": "object",
             "properties": {
@@ -5746,14 +5626,6 @@
                 },
                 "start": {
                     "type": "string"
-                }
-            }
-        },
-        "library.GetCreditPointResponse": {
-            "type": "object",
-            "properties": {
-                "creditPoints": {
-                    "$ref": "#/definitions/library.CreditPoints"
                 }
             }
         },
@@ -5980,35 +5852,6 @@
                 }
             }
         },
-        "library.ReserveDiscussionRequest": {
-            "type": "object",
-            "properties": {
-                "dev_id": {
-                    "type": "string"
-                },
-                "end": {
-                    "type": "string"
-                },
-                "kind_id": {
-                    "type": "string"
-                },
-                "lab_id": {
-                    "type": "string"
-                },
-                "list": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "start": {
-                    "type": "string"
-                },
-                "title": {
-                    "type": "string"
-                }
-            }
-        },
         "library.ReserveSeatRandomlyRequest": {
             "type": "object",
             "properties": {
@@ -6075,31 +5918,6 @@
                     "items": {
                         "$ref": "#/definitions/library.Seat"
                     }
-                }
-            }
-        },
-        "library.Search": {
-            "type": "object",
-            "properties": {
-                "Pid": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "label": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
-        "library.SearchUserResponse": {
-            "type": "object",
-            "properties": {
-                "search": {
-                    "$ref": "#/definitions/library.Search"
                 }
             }
         },
