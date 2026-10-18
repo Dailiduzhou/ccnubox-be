@@ -79,18 +79,7 @@ func (s *discussionService) GetDiscussion(ctx context.Context, req *libraryv1.Ge
 }
 
 func (s *discussionService) ReserveDiscussion(ctx context.Context, req *libraryv1.ReserveDiscussionRequest) (*libraryv1.ReserveDiscussionResponse, error) {
-	if req == nil {
-		return nil, ErrGetDiscussion(errorx.New("request is required"))
-	}
-	token, err := s.getDiscussionToken(ctx, req.StuId)
-	if err != nil {
-		return nil, err
-	}
-	msg, err := s.crawler.ReserveDiscussion(ctx, token, req.DevId, req.LabId, req.KindId, req.Title, req.Start, req.End, req.List)
-	if err != nil {
-		return nil, ErrGetDiscussion(errorx.Errorf("reserve discussion failed, stuId: %s, err: %w", req.StuId, err))
-	}
-	return &libraryv1.ReserveDiscussionResponse{Message: msg}, nil
+	return nil, ErrGetDiscussion(errorx.New("研讨间预约功能不可用"))
 }
 
 func (s *discussionService) getDiscussionToken(ctx context.Context, studentID string) (string, error) {

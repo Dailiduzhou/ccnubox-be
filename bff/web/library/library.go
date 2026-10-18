@@ -198,52 +198,6 @@ func (h *LibraryHandler) GetSeatRecord(ctx *gin.Context, req GetSeatRecordReques
 	}, nil
 }
 
-// GetCreditPoint 获取信誉分
-// @Summary 获取信誉分
-// @Description 获取信誉分及扣分记录
-// @Tags library
-// @Accept json
-// @Produce json
-// @Param Authorization header string true "Bearer Token"
-// @Success 200 {object} web.Response{data=GetCreditPointResponse} "成功返回信誉分"
-// @Failure 500 {object} web.Response "系统异常，获取失败"
-// TODO：不可用
-func (h *LibraryHandler) GetCreditPoint(ctx *gin.Context, uc ijwt.UserClaims) (web.Response, error) {
-	res, err := h.LibraryClient.GetCreditPoint(ctx, &libraryv1.GetCreditPointRequest{
-		StuId: uc.StudentId,
-	})
-	if err != nil {
-		return web.Response{}, errs.GET_CREDIT_POINTS_ERROR(err)
-	}
-
-	summary := CreditSummary{
-		System: res.CreditSummary.System,
-		Remain: res.CreditSummary.Remain,
-		Total:  res.CreditSummary.Total,
-	}
-
-	records := make([]CreditRecord, 0, len(res.CreditRecord))
-	for _, record := range res.CreditRecord {
-		records = append(records, CreditRecord{
-			Title:    record.Title,
-			Subtitle: record.Subtitle,
-			Location: record.Location,
-		})
-	}
-
-	resp := GetCreditPointResponse{
-		CreditPoints: CreditPoints{
-			Summary: summary,
-			Records: records,
-		},
-	}
-
-	return web.Response{
-		Msg:  "Success",
-		Data: resp,
-	}, nil
-}
-
 // GetDiscussion 获取图书馆研讨间信息
 // @Summary 获取图书馆研讨间信息
 // @Description 传入时间获取图书馆研讨间信息
@@ -292,72 +246,6 @@ func (h *LibraryHandler) GetDiscussion(ctx *gin.Context, req GetDiscussionReques
 	return web.Response{
 		Msg:  "Success",
 		Data: resp,
-	}, nil
-}
-
-// SearchUser 搜索学生ID
-// @Summary 搜索学生ID
-// @Description 传入学生学号获取对应的学生ID
-// @Tags library
-// @Accept json
-// @Produce json
-// @Param Authorization header string true "Bearer Token"
-// @Param request query SearchUserRequest true "搜索学生ID的请求参数"
-// @Success 200 {object} web.Response{data=SearchUserResponse} "成功返回学生的ID"
-// @Failure 500 {object} web.Response "系统异常，获取失败"
-// TODO：不可用，要删
-func (h *LibraryHandler) SearchUser(ctx *gin.Context, req SearchUserRequest, uc ijwt.UserClaims) (web.Response, error) {
-	res, err := h.LibraryClient.SearchUser(ctx, &libraryv1.SearchUserRequest{
-		StudentId: req.StudentID,
-		StuId:     uc.StudentId,
-	})
-	if err != nil {
-		return web.Response{}, errs.SEARCH_USER_ERROR(err)
-	}
-
-	resp := SearchUserResponse{
-		Search: Search{
-			ID:    res.Id,
-			Pid:   res.Pid,
-			Name:  res.Name,
-			Label: res.Label,
-		},
-	}
-
-	return web.Response{
-		Msg:  "Success",
-		Data: resp,
-	}, nil
-}
-
-// ReserveDiscussion 预约研讨间
-// @Summary 预约研讨间
-// @Description 传入学生ID,时间,主题等预约研讨间
-// @Tags library
-// @Accept json
-// @Produce json
-// @Param Authorization header string true "Bearer Token"
-// @Param request body ReserveDiscussionRequest true "预约研讨间所需要的参数"
-// @Success 200 {object} web.Response "成功返回预约研讨间成功"
-// @Failure 500 {object} web.Response "系统异常，获取失败"
-// TODO：不可用
-func (h *LibraryHandler) ReserveDiscussion(ctx *gin.Context, req ReserveDiscussionRequest, uc ijwt.UserClaims) (web.Response, error) {
-	_, err := h.LibraryClient.ReserveDiscussion(ctx, &libraryv1.ReserveDiscussionRequest{
-		DevId:  req.DevID,
-		LabId:  req.LabID,
-		KindId: req.KindID,
-		Title:  req.Title,
-		Start:  req.Start,
-		End:    req.End,
-		List:   req.List,
-		StuId:  uc.StudentId,
-	})
-	if err != nil {
-		return web.Response{}, errs.RESERVE_DISCUSSION_ERROR(err)
-	}
-
-	return web.Response{
-		Msg: "Success",
 	}, nil
 }
 
