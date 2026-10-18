@@ -19,6 +19,7 @@ func NewBatchHandler[T any](
 	l logger.Logger,
 	cfg *HandlerConfig,
 	fn func(msgs []*sarama.ConsumerMessage, t []T) error) *BatchHandler[T] {
+	cfg = normalizeHandlerConfig(cfg)
 	return &BatchHandler[T]{
 		l:   l,
 		cfg: cfg,

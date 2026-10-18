@@ -31,6 +31,7 @@ func NewContextHandler[T any](
 	l logger.Logger,
 	cfg *HandlerConfig,
 	fn func(context.Context, []T) error) *Handler[T] {
+	cfg = normalizeHandlerConfig(cfg)
 	return &Handler[T]{
 		l: l,
 		fn: func(ctx context.Context, _ []*sarama.ConsumerMessage, events []T) error {
@@ -185,6 +186,7 @@ func (h *Handler[T]) dropDecodeFailure(session sarama.ConsumerGroupSession, msg 
 // consumeOneByOne 在整批失败后逐条重试，定位到底哪几条消息处理不了：
 // 成功的消息照常确认（不再随整批重投），永久失败的消息按阈值决定跳过还是继续阻塞。
 // 先收齐每条结果再统一确认，避免中途确认后面的消息越过前面的失败位点。
+// 后续消息可能已产生副作用，连续位点确认不保证副作用顺序，业务仍须幂等。
 func (h *Handler[T]) consumeOneByOne(events *[]T, msgRecords *[]*sarama.ConsumerMessage, session sarama.ConsumerGroupSession, logh logger.Logger) error {
 	msgs, evs := *msgRecords, *events
 	results := make([]error, len(msgs))

@@ -16,6 +16,8 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/pkg/saramax"
 )
 
+var _ saramax.Consumer = (*FeedEventConsumerHandler)(nil)
+
 // FeedEventConsumerHandler 是处理 Feed 事件消费的结构体
 type FeedEventConsumerHandler struct {
 	cg          consumer.Consumer        //消费者
