@@ -14,7 +14,7 @@ import (
 )
 
 func InitGRPCServer(server *classgrpc.ClassServer, etcd *clientv3.Client, l logger.Logger, cfg *conf.InfraConf) grpcx.Server {
-	return grpcserver.InitGRPCxKratosServer(server, etcd, l, (*cfg.Grpc)[bgrpc.CLASSS], cfg.Env)
+	return grpcserver.InitGRPCxKratosServer(server, etcd, l, bgrpc.GetConf(cfg.Grpc, bgrpc.CLASSS), cfg.Env)
 }
 
 func InitHTTPServer(handler *classhttp.Handler, cfg *conf.ServerConf) *stdhttp.Server {

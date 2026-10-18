@@ -1,7 +1,7 @@
 package server
 
 import (
-	"time"
+	"fmt"
 
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/conf"
 	b_grpc "github.com/asynccnu/ccnubox-be/common/bizpkg/grpc"
@@ -29,12 +29,24 @@ func InitGRPCxKratosServer(
 	env *conf.Env,
 	middlewares ...middleware.Middleware,
 ) grpcx.Server {
-	newCfg := *cfg
-	// 添加前缀
-	newCfg.Name = b_grpc.GetNamePrefix(env, newCfg.Name)
+	options, err := b_grpc.ServerOptionsFrom(cfg)
+	if err != nil {
+		panic(fmt.Sprintf("gRPC 服务端配置错误: %v", err))
+	}
+	options.Name = b_grpc.GetNamePrefix(env, options.Name)
+	return newGRPCxKratosServer(grpcServer, ecli, l, options, middlewares...)
+}
+
+func newGRPCxKratosServer(
+	grpcServer GrpcServer,
+	ecli *clientv3.Client,
+	l logger.Logger,
+	options b_grpc.GRPCServerOptions,
+	middlewares ...middleware.Middleware,
+) grpcx.Server {
 	hs := health.NewServer()
 	s := kgrpc.NewServer(
-		kgrpc.Address(cfg.Addr),
+		kgrpc.Address(options.Addr),
 		kgrpc.CustomHealth(),
 		kgrpc.Middleware(
 			append([]middleware.Middleware{
@@ -44,17 +56,17 @@ func InitGRPCxKratosServer(
 				HealthMiddleware(hs),
 			}, middlewares...)...,
 		),
-		kgrpc.Timeout(time.Duration(cfg.ServerTimeout)*time.Minute),
+		kgrpc.Timeout(options.Timeout),
 	)
 	healthpb.RegisterHealthServer(s, hs)
-	hs.SetServingStatus(newCfg.Name, healthpb.HealthCheckResponse_SERVING)
+	hs.SetServingStatus(options.Name, healthpb.HealthCheckResponse_SERVING)
 
 	grpcServer.Register(s)
 	return &grpcx.KratosServer{
 		Server:     s,
-		Name:       newCfg.Name,
-		Weight:     newCfg.Weight,
-		EtcdTTL:    time.Second * time.Duration(newCfg.EtcdTTL),
+		Name:       options.Name,
+		Weight:     options.Weight,
+		EtcdTTL:    options.EtcdTTL,
 		EtcdClient: ecli,
 		L:          l,
 	}

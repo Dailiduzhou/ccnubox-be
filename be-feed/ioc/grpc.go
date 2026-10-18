@@ -11,5 +11,5 @@ import (
 )
 
 func InitGRPCxKratosServer(grpcServer *grpc.FeedServiceServer, ecli *clientv3.Client, l logger.Logger, cfg *conf.InfraConf) grpcx.Server {
-	return server.InitGRPCxKratosServer(grpcServer, ecli, l, (*cfg.Grpc)[b_grpc.FEED], cfg.Env)
+	return server.InitGRPCxKratosServer(grpcServer, ecli, l, b_grpc.GetConf(cfg.Grpc, b_grpc.FEED), cfg.Env)
 }

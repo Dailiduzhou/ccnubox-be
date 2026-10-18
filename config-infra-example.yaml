@@ -37,6 +37,7 @@ elasticsearch:
   password: "password"
   sniff: false
 
+# etcdTTL、clientTimeout 单位为秒；serverTimeout 单位为分钟，未配置或为 0 时不限制超时。
 grpc:
   ccnu:
     name: "ccnu"

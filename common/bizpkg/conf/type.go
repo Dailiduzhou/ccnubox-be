@@ -91,9 +91,7 @@ type BaseServerConf struct {
 
 // GRPC
 
-// TODO 这个地方目前逻辑上非常耦合，期望找到更加合理而且好用的方案
-// client和server用的同一个配置文件,同一个结构体,主要是为了防止出现服务名称不一致的问题做的权衡
-// 目前改造的想法是一个结构体是server的，另一个是client的,然后infra存储每个服务的addr和name，方便统一调控，这样既保证了服务的访问的统一性又能保证各个服务的隔离性
+// GrpcConfs 保留共享服务目录的 YAML 结构，运行时分别转换为客户端和服务端 options。
 type GrpcConfs map[string]*GrpcConf
 
 type GrpcConf struct {
