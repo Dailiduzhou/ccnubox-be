@@ -16,7 +16,6 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/bizpkg/proxy"
 	"github.com/asynccnu/ccnubox-be/common/pkg/httpx"
 	"github.com/asynccnu/ccnubox-be/common/pkg/logger"
-	"gorm.io/gorm"
 )
 
 const (
@@ -30,7 +29,7 @@ const (
 var (
 	courseURL         = "https://bkzhjw.ccnu.edu.cn/jsxsd/pyfa/topyfamx"
 	classTypes        = []string{identity, common, specific}
-	ErrRecordNotFound = gorm.ErrRecordNotFound
+	ErrRecordNotFound = errors.New("cultivate strategy record not found")
 )
 
 // yearTermMapper 第一类情况映射
@@ -73,8 +72,7 @@ var classMapper = map[string]string{
 
 type CultivateStrategyData interface {
 	BatchSaveToBeStudiedClass(ctx context.Context, relations []model.UnStudiedClassStudentRelationship, classes []model.ToBeStudiedClass) error
-	GetClassStudentRelation(ctx context.Context, stuId, status string, alive time.Duration) ([]model.UnStudiedClassStudentRelationship, error)
-	GetDetailUnStudyClass(ctx context.Context, id string) (model.ToBeStudiedClass, error)
+	ListStudentClasses(ctx context.Context, stuId, status string, alive time.Duration) ([]model.ToBeStudiedClass, error)
 
 	DataAlive() time.Duration
 }
@@ -144,19 +142,6 @@ func (c *CultivateStrategyBiz) GetToBeStudiedClass(ctx context.Context, stuId, s
 
 	c.logger.WithContext(ctx).Warn("no stale unstudied classes in database")
 	return model.ToBeStudiedClasses{}, err
-}
-
-// aggregateToService 把数据库模型转换成领域模型, 但是感觉data层有更好的处理方法 TODO
-func aggregateToService(r model.UnStudiedClassStudentRelationship, c model.ToBeStudiedClass) model.ToBeStudiedClass {
-	return model.ToBeStudiedClass{
-		Id:        c.Id,
-		Name:      c.Name,
-		Status:    r.Status,
-		Property:  c.Property,
-		Studiable: c.Studiable,
-		Credit:    c.Credit,
-		Type:      c.Type,
-	}
 }
 
 // SaveClassesAndRelationsToDB 将爬虫结果存入数据库
@@ -268,25 +253,11 @@ func (c *CultivateStrategyBiz) GetCultivateStrategyFromCCNU(ctx context.Context,
 
 func (c *CultivateStrategyBiz) GetCultivateStrategyFromDB(ctx context.Context, stuId string,
 	status string, dataAlive time.Duration) (model.ToBeStudiedClasses, error) {
-	relations, err := c.csData.GetClassStudentRelation(ctx, stuId, status, dataAlive)
+	classes, err := c.csData.ListStudentClasses(ctx, stuId, status, dataAlive)
 	if err != nil {
 		return model.ToBeStudiedClasses{}, err
 	}
-
-	classes := make([]model.ToBeStudiedClass, len(relations))
-
-	// 找到然后聚合
-	for i, relation := range relations {
-		class, err := c.csData.GetDetailUnStudyClass(ctx, relation.ToBeStudiedClassId)
-		if err != nil {
-			return model.ToBeStudiedClasses{}, err
-		}
-		classes[i] = aggregateToService(relation, class)
-	}
-
-	res := distinguishByClassType(classes)
-
-	return res, nil
+	return distinguishByClassType(classes), nil
 }
 
 // extractUnstudiedClasses 从响应提取课程
