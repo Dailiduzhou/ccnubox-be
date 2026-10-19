@@ -31,6 +31,7 @@ func NewContextHandler[T any](
 	l logger.Logger,
 	cfg *HandlerConfig,
 	fn func(context.Context, []T) error) *Handler[T] {
+	cfg = normalizeHandlerConfig(cfg)
 	return &Handler[T]{
 		l: l,
 		fn: func(ctx context.Context, _ []*sarama.ConsumerMessage, events []T) error {

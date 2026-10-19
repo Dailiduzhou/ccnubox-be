@@ -376,7 +376,7 @@ func (s *gradeService) newUGWithCookie(ctx context.Context, studentId string) (*
 		return nil, errorx.Errorf("service: newUG rpc cookie failed, sid: %s, err: %w", studentId, err)
 	}
 	if cookieResp == nil || cookieResp.Cookie == "" {
-		return nil, saramax.Permanent(errorx.New("service: empty cookie for grade detail"))
+		return nil, errorx.New("service: empty cookie for grade detail")
 	}
 	return s.newUG(cookieResp.Cookie)
 }

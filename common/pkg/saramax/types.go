@@ -2,16 +2,12 @@ package saramax
 
 import (
 	"context"
-	"log"
+	"sync"
 )
 
-// TODO 待完善的pkg
+// Consumer 的 Stop 必须取消消费会话、释放资源，并允许重复调用。
 type Consumer interface {
 	Start() error
-}
-
-// stopper 由具体的消费者实现，用于停机时释放会话并确认已处理的位点。
-type stopper interface {
 	Stop()
 }
 
@@ -20,16 +16,17 @@ type stopper interface {
 // 返回 false 表示等待超时。
 func StopConsumers(ctx context.Context, consumers []Consumer) bool {
 	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, c := range consumers {
+		wg.Add(1)
+		go func(c Consumer) {
+			defer wg.Done()
+			c.Stop()
+		}(c)
+	}
 	go func() {
-		defer close(done)
-		for _, c := range consumers {
-			if s, ok := c.(stopper); ok {
-				s.Stop()
-			} else {
-				// 新增消费者忘了实现 Stop 时停机会静默跳过，只能靠这里提醒。
-				log.Printf("KAFKA consumer %T 未实现 Stop()，停机时不再等待其退出", c)
-			}
-		}
+		wg.Wait()
+		close(done)
 	}()
 	select {
 	case <-done:
@@ -40,8 +37,10 @@ func StopConsumers(ctx context.Context, consumers []Consumer) bool {
 }
 
 type HandlerConfig struct {
+	// ConsumeTime 是空闲批次窗口（分钟），<=0 时收到消息即刷新。
 	ConsumeTime int `yaml:"consumeTime"`
-	ConsumeNum  int `yaml:"consumeNum"`
+	// ConsumeNum <=0 时使用 1，避免无效批次大小。
+	ConsumeNum int `yaml:"consumeNum"`
 	// RetryAttempts 是单次批次在会话内的重试次数上限，<=0 时按默认 4 次。
 	// 失败批次最终仍会结束会话并靠 Kafka 重投，长周期故障主要交给消费循环的外层退避。
 	RetryAttempts int `yaml:"retryAttempts"`
@@ -49,4 +48,18 @@ type HandlerConfig struct {
 	// 小于 0 时禁用跳过（永久失败的消息会一直阻塞分区，等人工处理）。
 	// 只有 saramax.Permanent 包装的错误参与计数，依赖故障不会被跳过。
 	SkipAttempts int `yaml:"skipAttempts"`
+}
+
+func normalizeHandlerConfig(cfg *HandlerConfig) *HandlerConfig {
+	var result HandlerConfig
+	if cfg != nil {
+		result = *cfg
+	}
+	if result.ConsumeNum <= 0 {
+		result.ConsumeNum = 1
+	}
+	if result.ConsumeTime < 0 {
+		result.ConsumeTime = 0
+	}
+	return &result
 }

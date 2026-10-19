@@ -16,6 +16,8 @@ import (
 	"github.com/asynccnu/ccnubox-be/common/pkg/saramax"
 )
 
+var _ saramax.Consumer = (*GradeDetailEventConsumerHandler)(nil)
+
 // GradeDetailEventConsumerHandler 是处理 GradeDetail 事件消费的结构体
 type GradeDetailEventConsumerHandler struct {
 	cg           consumer.Consumer    //消费者
