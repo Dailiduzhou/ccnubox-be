@@ -58,6 +58,18 @@ func (c *Passport) LoginPassport(ctx context.Context, stuId string, password str
 	return true, nil
 }
 
+// LoginPassportOnce 用于已有 RPC 层重试的凭证链路，避免逐层放大登录次数。
+func (c *Passport) LoginPassportOnce(ctx context.Context, stuId, password string) (bool, error) {
+	params, err := c.getParamsFromHtml(ctx)
+	if err != nil {
+		return false, errorx.Errorf("passport: get login params failed: %w", err)
+	}
+	if err := c.loginCCNUPassport(ctx, stuId, password, params); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // 1. 前置请求：从 HTML 中提取参数
 func (c *Passport) getParamsFromHtml(ctx context.Context) (*accountRequestParams, error) {
 	params := &accountRequestParams{}
@@ -136,7 +148,7 @@ func (c *Passport) loginCCNUPassport(
 	v.Set("epid", "Edge145.0.0.0")
 	v.Set("ugt", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	urlstr := LoginCCNUPassPortURL + ";jsessionid=" + params.JSESSIONID
 	request, err := http.NewRequestWithContext(ctx, "POST", urlstr, strings.NewReader(v.Encode()))

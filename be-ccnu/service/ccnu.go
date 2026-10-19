@@ -117,6 +117,15 @@ func (c *ccnuService) loginUnderGrad(ctx context.Context, studentId string, pass
 	return ps.Client, flag, nil
 }
 
+func (c *ccnuService) loginUnderGradOnce(ctx context.Context, studentId, password string) (*http.Client, bool, error) {
+	ps := crawler.NewPassport(crawler.NewCrawlerClient(c.p, c.timeout))
+	ok, err := ps.LoginPassportOnce(ctx, studentId, password)
+	if err != nil {
+		return nil, ok, wrapUnderGradLoginError(err)
+	}
+	return ps.Client, ok, nil
+}
+
 func wrapUnderGradLoginError(err error) error {
 	switch {
 	case errorx.Is(err, crawler.INCorrectPASSWORD):
@@ -130,7 +139,7 @@ func wrapUnderGradLoginError(err error) error {
 
 func (c *ccnuService) getUnderGradCookie(ctx context.Context, stuId, password string) (string, error) {
 	ug := crawler.NewUnderGrad(crawler.NewCrawlerClient(c.p, c.timeout))
-	client, ok, err := c.loginUnderGrad(ctx, stuId, password)
+	client, ok, err := c.loginUnderGradOnce(ctx, stuId, password)
 	if err != nil {
 		if tool.IsCCNUAccountInitializationRequired(err) {
 			return "", err
@@ -143,14 +152,7 @@ func (c *ccnuService) getUnderGradCookie(ctx context.Context, stuId, password st
 	}
 
 	ug.Client = client
-	_, err = tool.Retry(func() (string, error) {
-		err := ug.LoginUnderGradSystem(ctx)
-		if err != nil {
-			return "", err
-		}
-		return "", nil
-	})
-	if err != nil {
+	if err = ug.LoginUnderGradSystem(ctx); err != nil {
 		return "", CCNUSERVER_ERROR(errorx.Errorf("getUnderGradCookie LoginUnderGradSystem error: %w", err))
 	}
 
@@ -164,9 +166,7 @@ func (c *ccnuService) getUnderGradCookie(ctx context.Context, stuId, password st
 
 func (c *ccnuService) getGradCookie(ctx context.Context, stuId, password string) (string, error) {
 	pg := crawler.NewPostGraduate(crawler.NewCrawlerClient(c.p, c.timeout))
-	pubkey, err := tool.Retry(func() (*rsa.PublicKey, error) {
-		return pg.FetchPublicKey(ctx)
-	})
+	pubkey, err := pg.FetchPublicKey(ctx)
 	if err != nil {
 		return "", CCNUSERVER_ERROR(errorx.Errorf("getGradCookie FetchPublicKey error: %w", err))
 	}
@@ -183,7 +183,7 @@ func (c *ccnuService) getGradCookie(ctx context.Context, stuId, password string)
 
 func (c *ccnuService) GetLibraryToken(ctx context.Context, studentId, password string, service ccnuv1.LIBRARY_TYPE) (string, error) {
 	l := crawler.NewLibrary(crawler.NewCrawlerClient(c.p, c.timeout, proxy.WithoutProxy()), c.secret) // 这里简化了，实际可按需加 Proxy
-	client, ok, err := c.loginUnderGrad(ctx, studentId, password)
+	client, ok, err := c.loginUnderGradOnce(ctx, studentId, password)
 	if err != nil {
 		if tool.IsCCNUAccountInitializationRequired(err) {
 			return "", err
