@@ -13,9 +13,6 @@ func InitMetrics() *metricsx.Metrics {
 // InitMetricsServer 基于 gRPC 监听地址派生 metrics HTTP 监听地址,
 // 不依赖额外 yaml 字段, 端口 = gRPC 端口 + 1000。
 func InitMetricsServer(cfg *conf.InfraConf) *metricsx.Server {
-	grpcCfg := (*cfg.Grpc)[b_grpc.GRADE]
-	if grpcCfg == nil {
-		return metricsx.NewServer("")
-	}
+	grpcCfg := cfg.Grpc.Get(b_grpc.GRADE)
 	return metricsx.NewServerFromGRPCAddr(grpcCfg.Addr)
 }

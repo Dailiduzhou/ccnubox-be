@@ -12,5 +12,5 @@ import (
 )
 
 func InitGRPCxKratosServer(grpcServer *grpc.LibraryServiceServer, ecli *clientv3.Client, l logger.Logger, cfg *conf.InfraConf) grpcx.Server {
-	return server.InitGRPCxKratosServer(grpcServer, ecli, l, (*cfg.Grpc)[b_grpc.LIBRARY], cfg.Env)
+	return server.InitGRPCxKratosServer(grpcServer, ecli, l, cfg.Grpc.Get(b_grpc.LIBRARY), cfg.Env)
 }

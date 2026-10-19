@@ -14,9 +14,6 @@ func InitMetricsServer(cfg *conf.InfraConf) *metricsx.Server {
 	if cfg == nil || cfg.Grpc == nil {
 		return metricsx.NewServer("")
 	}
-	grpcCfg := (*cfg.Grpc)[bgrpc.LIBRARY]
-	if grpcCfg == nil {
-		return metricsx.NewServer("")
-	}
+	grpcCfg := cfg.Grpc.Get(bgrpc.LIBRARY)
 	return metricsx.NewServerFromGRPCAddr(grpcCfg.Addr)
 }

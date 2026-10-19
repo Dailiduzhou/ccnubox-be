@@ -12,10 +12,7 @@ import (
 func InitMetrics() *metricsx.Metrics { return metricsx.New("ccnubox") }
 
 func InitMetricsServer(cfg *conf.InfraConf) *metricsx.Server {
-	grpcCfg := (*cfg.Grpc)[bgrpc.CLASSS]
-	if grpcCfg == nil {
-		return metricsx.NewServer("")
-	}
+	grpcCfg := cfg.Grpc.Get(bgrpc.CLASSS)
 	return metricsx.NewServerFromGRPCAddr(grpcCfg.Addr)
 }
 

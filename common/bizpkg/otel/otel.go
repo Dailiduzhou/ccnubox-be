@@ -13,7 +13,7 @@ import (
 
 func InitOTelFromInfra(infraCfg *conf.InfraConf, serviceKey string) func(ctx context.Context) error {
 	cfg := &conf.OtelConf{
-		ServiceName: bgrpc.GetNamePrefix(infraCfg.Env, (*infraCfg.Grpc)[serviceKey].Name),
+		ServiceName: bgrpc.GetNamePrefix(infraCfg.Env, infraCfg.Grpc.Get(serviceKey).Name),
 		Endpoint:    infraCfg.Otel.Endpoint,
 	}
 	return InitOTel(cfg)

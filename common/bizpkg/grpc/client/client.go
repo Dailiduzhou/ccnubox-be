@@ -3,8 +3,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"log"
-	"time"
 
 	ccnuv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/ccnu/v1"
 	classv1 "github.com/asynccnu/ccnubox-be/common/api/gen/proto/classService/v1"
@@ -30,33 +28,43 @@ import (
 // --- 核心泛型工具函数 ---
 
 func NewGrpcClient(ecli *clientv3.Client, cfg *conf.GrpcConf) *grpc.ClientConn {
+	opts, err := cfg.ClientOptions()
+	if err != nil {
+		panic(err)
+	}
+	return NewGrpcClientWithOptions(ecli, opts)
+}
+
+func NewGrpcClientWithOptions(ecli *clientv3.Client, opts conf.GRPCClientOptions) *grpc.ClientConn {
+	if err := opts.Validate(); err != nil {
+		panic(err)
+	}
 	r := etcd.New(ecli)
 	cc, err := k_grpc.DialInsecure(context.Background(),
-		k_grpc.WithEndpoint(fmt.Sprintf("discovery:///%s", cfg.Name)),
+		k_grpc.WithEndpoint(fmt.Sprintf("discovery:///%s", opts.Name)),
 		k_grpc.WithDiscovery(r),
-		k_grpc.WithTimeout(time.Duration(cfg.ClientTimeout)*time.Second),
+		k_grpc.WithTimeout(opts.Timeout),
 		k_grpc.WithMiddleware(tracing.Client()),
 		k_grpc.WithHealthCheck(false),
 	)
 	if err != nil {
-		panic(fmt.Sprintf("连接服务 %s 失败: %v", cfg.Name, err))
+		panic(fmt.Sprintf("连接服务 %s 失败: %v", opts.Name, err))
 	}
 	return cc
 }
 
 func InitClient[T any](ecli *clientv3.Client, cfg *conf.GrpcConf, env *conf.Env, fn func(cc grpc.ClientConnInterface) T) T {
-	newCfg := *cfg
-	newCfg.Name = b_grpc.GetNamePrefix(env, newCfg.Name)
-	return fn(NewGrpcClient(ecli, &newCfg))
+	opts, err := cfg.ClientOptions()
+	if err != nil {
+		panic(err)
+	}
+	opts.Name = b_grpc.GetNamePrefix(env, opts.Name)
+	return fn(NewGrpcClientWithOptions(ecli, opts))
 }
 
 // 内部辅助：安全获取配置
 func GetConf(cfg *conf.GrpcConfs, key string) *conf.GrpcConf {
-	c, ok := (*cfg)[key]
-	if !ok {
-		log.Fatalf("配置中缺失服务定义: %s", key)
-	}
-	return c
+	return cfg.Get(key)
 }
 
 // --- 各服务初始化函数 ---
