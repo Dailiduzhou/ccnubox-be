@@ -91,4 +91,6 @@ Collector 仅接受以下固定映射；任何额外 Label 都会导致整批请
 
 ## 系统架构
 
-// TODO
+HTTP 请求由 Gin 路由分发，经鉴权与响应中间件进入 `web/` 中的 handler，再通过 gRPC 调用各后端服务。`web/ijwt` 负责 Token 签发与会话撤销，`pkg/ginx` 提供参数绑定、claims 提取和响应包装。
+
+服务依赖关系见根目录 [架构图](../README.md#架构图)。
