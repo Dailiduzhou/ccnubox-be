@@ -1,8 +1,4 @@
 package topic
 
-//有点弱智啊,单独开个页面放一个const
-
-// 定义 Kafka 消息主题常量,用于存储消费的主题
+// FeedEvent 供生产和消费端共享，独立包避免 service 与 events 循环依赖。
 const FeedEvent = "feed_event"
-
-// TODO 找个更好的结构解决这个问题
