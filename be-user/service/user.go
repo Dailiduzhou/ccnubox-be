@@ -46,6 +46,7 @@ type userService struct {
 	cache        cache.UserCache
 	ccnu         ccnuv1.CCNUServiceClient
 	sfGroup      singleflight.Group
+	credentials  credentialGuard
 	l            logger.Logger
 }
 
@@ -54,6 +55,11 @@ func NewUserService(dao dao.UserDAO, cache cache.UserCache, cryptoClient *crypto
 }
 
 func (s *userService) Delete(ctx context.Context, studentId string, password string) error {
+	unlock, err := s.credentials.lock(ctx, studentId)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	user, err := s.dao.FindByStudentId(ctx, studentId)
 	if err != nil {
 		if errors.Is(err, dao.UserNotFound) {
@@ -68,6 +74,7 @@ func (s *userService) Delete(ctx context.Context, studentId string, password str
 	if subtle.ConstantTimeCompare([]byte(storedPassword), []byte(password)) != 1 {
 		return InCorrectPassword(errorx.New("service: delete user password mismatch"))
 	}
+	s.forgetCredentials(studentId)
 	if err := s.cache.DeleteUserData(ctx, studentId); err != nil {
 		return DEFAULT_DAO_ERROR(errorx.Errorf("service: clear user credentials before deletion failed, sid: %s, err: %w", studentId, err))
 	}
@@ -78,6 +85,12 @@ func (s *userService) Delete(ctx context.Context, studentId string, password str
 }
 
 func (s *userService) Save(ctx context.Context, studentId string, password string) error {
+	unlock, err := s.credentials.lock(ctx, studentId)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	passwordChanged := false
 	user, err := s.dao.FindByStudentId(ctx, studentId)
 	switch {
 	case err == nil:
@@ -85,7 +98,8 @@ func (s *userService) Save(ctx context.Context, studentId string, password strin
 		if decryptErr != nil {
 			return DECRYPT_ERROR(errorx.Errorf("service: decrypt stored password failed, sid: %s, err: %w", studentId, decryptErr))
 		}
-		if storedPassword == password && !s.cryptoClient.NeedsMigration(user.Password) {
+		passwordChanged = storedPassword != password
+		if !passwordChanged && !s.cryptoClient.NeedsMigration(user.Password) {
 			return nil
 		}
 	case errors.Is(err, dao.UserNotFound):
@@ -102,6 +116,13 @@ func (s *userService) Save(ctx context.Context, studentId string, password strin
 	}
 	user.Password = encryptedPwd
 
+	if passwordChanged {
+		// 清理失败不保存新密码，重试仍会进入此分支；仅加密格式迁移不失效凭证。
+		s.forgetCredentials(studentId)
+		if err := s.cache.DeleteUserData(ctx, studentId); err != nil {
+			return DEFAULT_DAO_ERROR(errorx.Errorf("service: clear credentials before password change failed, sid: %s, err: %w", studentId, err))
+		}
+	}
 	if err = s.dao.Save(ctx, user); err != nil {
 		return SAVE_USER_ERROR(errorx.Errorf("service: dao save failed, sid: %s, err: %w", studentId, err))
 	}
@@ -162,7 +183,15 @@ func (s *userService) GetCookie(ctx context.Context, studentId string, system to
 	tlog := s.l.WithContext(ctx)
 	// 系统类型在兼容入口归一化，缓存与请求合并使用同一份明确类型。
 	key := fmt.Sprintf("xk:%s:%s", system, studentId)
+	// 保留首个请求控制共享任务、等待方随任务返回的语义；抓取最多 30 秒，回填另限 1 秒。
 	result, err, _ := s.sfGroup.Do(key, func() (interface{}, error) {
+		ctx, cancel := context.WithTimeout(ctx, credentialTimeout)
+		defer cancel()
+		unlock, err := s.credentials.lock(ctx, studentId)
+		if err != nil {
+			return "", err
+		}
+		defer unlock()
 		cookie, err := s.cache.GetCookie(ctx, studentId, system)
 		if err == nil {
 			resp, checkErr := s.ccnu.CheckXKCookie(ctx, &ccnuv1.CheckXKCookieRequest{Cookie: cookie, Type: string(system)})
@@ -207,6 +236,13 @@ func (s *userService) GetCookie(ctx context.Context, studentId string, system to
 }
 
 func (s *userService) getNewCookie(ctx context.Context, studentId string, system tool.XKSystem) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, credentialTimeout)
+	defer cancel()
+	release, err := s.credentials.acquireLogin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	user, err := s.dao.FindByStudentId(ctx, studentId)
 	if err != nil {
 		if errors.Is(err, dao.UserNotFound) {
@@ -220,29 +256,11 @@ func (s *userService) getNewCookie(ctx context.Context, studentId string, system
 		return "", DECRYPT_ERROR(errorx.Errorf("sid: %s, err: %w", studentId, err))
 	}
 
-	// 保留暂时故障的有限重试，永久性账号错误和请求取消则立即停止。
-	var terminalErr error
-	resp, err := tool.Retry(func() (*ccnuv1.GetXKCookieResponse, error) {
-		if ctx.Err() != nil {
-			terminalErr = ctx.Err()
-			return nil, nil
-		}
-		resp, err := s.ccnu.GetXKCookie(ctx, &ccnuv1.GetXKCookieRequest{
+	resp, err := retryCredential(ctx, func() (*ccnuv1.GetXKCookieResponse, error) {
+		return s.ccnu.GetXKCookie(ctx, &ccnuv1.GetXKCookieRequest{
 			StudentId: user.StudentId, Password: decryptPassword, Type: string(system),
 		})
-		if err != nil && (ccnuv1.IsInvalidSidOrPwd(err) || ccnuv1.IsInvalidXkSystem(err) ||
-			tool.IsCCNUAccountInitializationRequired(err) || ctx.Err() != nil) {
-			terminalErr = err
-			if ctx.Err() != nil {
-				terminalErr = ctx.Err()
-			}
-			return nil, nil
-		}
-		return resp, err
 	})
-	if terminalErr != nil {
-		err = terminalErr
-	}
 	if err != nil {
 		return "", errorx.Errorf("rpc GetXKCookie failed, system: %s, err: %w", system, err)
 	}
@@ -263,6 +281,13 @@ func (s *userService) GetLibraryDiscussionToken(ctx context.Context, studentId s
 func (s *userService) GetLibraryToken(ctx context.Context, studentId string, serviceType ccnuv1.LIBRARY_TYPE) (string, error) {
 	key := fmt.Sprintf("lib:%s:%s", serviceType, studentId)
 	result, err, _ := s.sfGroup.Do(key, func() (interface{}, error) {
+		ctx, cancel := context.WithTimeout(ctx, credentialTimeout)
+		defer cancel()
+		unlock, err := s.credentials.lock(ctx, studentId)
+		if err != nil {
+			return "", err
+		}
+		defer unlock()
 		token, err := s.cache.GetLibraryToken(ctx, studentId, serviceType.String())
 
 		if err != nil && !errors.Is(err, redis.Nil) {
@@ -284,11 +309,11 @@ func (s *userService) GetLibraryToken(ctx context.Context, studentId string, ser
 			return "", err
 		}
 
-		go func(sid, cky string) {
-			if err := s.cache.SetLibraryToken(context.Background(), sid, cky, serviceType.String()); err != nil {
-				s.l.Error("async fill library cache failed", logger.Error(err))
-			}
-		}(studentId, newToken)
+		cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		if err := s.cache.SetLibraryToken(cacheCtx, studentId, newToken, serviceType.String()); err != nil {
+			s.l.WithContext(ctx).Warn("library cache write failed", logger.Error(err))
+		}
 
 		return newToken, nil
 
@@ -301,9 +326,19 @@ func (s *userService) GetLibraryToken(ctx context.Context, studentId string, ser
 }
 
 func (s *userService) getNewLibraryToken(ctx context.Context, studentId string, serviceType ccnuv1.LIBRARY_TYPE) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, credentialTimeout)
+	defer cancel()
+	release, err := s.credentials.acquireLogin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	user, err := s.dao.FindByStudentId(ctx, studentId)
 	if err != nil {
-		return "", USER_NOT_FOUND_ERROR(err)
+		if errors.Is(err, dao.UserNotFound) {
+			return "", USER_NOT_FOUND_ERROR(err)
+		}
+		return "", DEFAULT_DAO_ERROR(err)
 	}
 
 	decryptPassword, err := s.cryptoClient.Decrypt(user.Password)
@@ -311,15 +346,16 @@ func (s *userService) getNewLibraryToken(ctx context.Context, studentId string, 
 		return "", DECRYPT_ERROR(err)
 	}
 
-	resp, err := tool.Retry(func() (*ccnuv1.GetLibraryTokenResponse, error) {
+	resp, err := retryCredential(ctx, func() (*ccnuv1.GetLibraryTokenResponse, error) {
 		return s.ccnu.GetLibraryToken(ctx, &ccnuv1.GetLibraryTokenRequest{
-			StudentId: user.StudentId,
-			Password:  decryptPassword,
-			Type:      serviceType,
+			StudentId: user.StudentId, Password: decryptPassword, Type: serviceType,
 		})
 	})
 	if err != nil {
 		return "", errorx.Errorf("rpc GetLibraryCookie failed, err: %w", err)
+	}
+	if resp == nil || resp.GetToken() == "" {
+		return "", errorx.New("rpc GetLibraryToken returned empty token")
 	}
 	return resp.GetToken(), nil
 }
