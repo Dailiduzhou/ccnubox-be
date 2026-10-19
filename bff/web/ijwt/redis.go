@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -21,7 +20,7 @@ import (
 
 // RedisJWTHandler 实现了处理 JWT 的接口，并使用 Redis 进行支持
 type RedisJWTHandler struct {
-	cmd           redis.Cmdable     // Redis 命令接口，用于与 Redis 进行交互
+	store         SessionStore      // 会话撤销存储
 	signingMethod jwt.SigningMethod // JWT 签名方法
 	rcExpiration  time.Duration     // 刷新令牌的过期时间，防止缓存过大
 	jwtKey        []byte            // 用于签署 JWT 的密钥
@@ -43,18 +42,21 @@ func (r *RedisJWTHandler) EncKey() []byte {
 	return r.encKey
 }
 
-// ClearToken 清除客户端的 JWT 和刷新令牌，并在 Redis 中记录已过期的会话
+// ClearToken 撤销会话成功后，清除客户端的 JWT 和刷新令牌。
 func (r *RedisJWTHandler) ClearToken(ctx *gin.Context) error {
-	// 要求客户端设置为空
-	ctx.Header("x-jwt-token", "")
-	ctx.Header("x-refresh-token", "")
-	// 在 Redis 中记录已过期的会话 TODO 这里需要解耦合,但是写的太抽象了一时半会儿看不明白,先这么做
 	uc, err := ginx.GetClaims[UserClaims](ctx)
 	if err != nil {
 		return err
 	}
-
-	return r.cmd.Set(ctx, fmt.Sprintf("ccnubox:users:ssid:%s", uc.Ssid), "", r.rcExpiration).Err()
+	if strings.TrimSpace(uc.Ssid) == "" {
+		return errors.New("session id is required")
+	}
+	if err := r.store.Revoke(ctx.Request.Context(), uc.Ssid, r.rcExpiration); err != nil {
+		return err
+	}
+	ctx.Header("x-jwt-token", "")
+	ctx.Header("x-refresh-token", "")
+	return nil
 }
 
 // ExtractToken 从请求中提取并返回 JWT
@@ -129,16 +131,22 @@ func (r *RedisJWTHandler) SetJWTToken(ctx *gin.Context, cp ClaimParams) error {
 	return nil
 }
 
-// CheckSession 检查给定 ssid 的会话是否有效
+// CheckSession 返回 true 表示会话已撤销；保留旧接口签名供鉴权及刷新路径使用。
 func (r *RedisJWTHandler) CheckSession(ctx *gin.Context, ssid string) (bool, error) {
-	val, err := r.cmd.Exists(ctx, fmt.Sprintf("ccnubox:users:ssid:%s", ssid)).Result()
-	return val > 0, err
+	if strings.TrimSpace(ssid) == "" {
+		return false, errors.New("session id is required")
+	}
+	return r.store.IsRevoked(ctx.Request.Context(), ssid)
 }
 
 // NewRedisJWTHandler 创建并返回一个新的 RedisJWTHandler 实例
 func NewRedisJWTHandler(cmd redis.Cmdable, jwtKey string, rcJWTKey string, encKey string) Handler {
+	return NewJWTHandler(NewRedisSessionStore(cmd), jwtKey, rcJWTKey, encKey)
+}
+
+func NewJWTHandler(store SessionStore, jwtKey string, rcJWTKey string, encKey string) Handler {
 	return &RedisJWTHandler{
-		cmd:           cmd,                     // redis实体
+		store:         store,
 		signingMethod: jwt.SigningMethodHS256,  // 签名的加密方式
 		rcExpiration:  time.Hour * 24 * 30 * 6, // 设置为六个月之后过期
 		jwtKey:        []byte(jwtKey),

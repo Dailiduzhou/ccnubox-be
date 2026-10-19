@@ -10,6 +10,7 @@ type Handler interface {
 	ExtractToken(ctx *gin.Context) string
 	SetLoginToken(ctx *gin.Context, studentId string, password string) error
 	SetJWTToken(ctx *gin.Context, cp ClaimParams) error
+	// CheckSession 返回 true 表示已撤销，存储故障必须返回错误。
 	CheckSession(ctx *gin.Context, ssid string) (bool, error)
 	JWTKey() []byte
 	RCJWTKey() []byte
