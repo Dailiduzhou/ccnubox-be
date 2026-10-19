@@ -694,5 +694,3 @@ func recordMinute(item gjson.Result, fields ...string) (Minute, error) {
 	}
 	return 0, errors.New("reservation minute is missing")
 }
-
-// TODO：改成了违约记录

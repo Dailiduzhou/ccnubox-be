@@ -1075,37 +1075,6 @@ definitions:
       username:
         type: string
     type: object
-  library.CreditPoints:
-    properties:
-      records:
-        items:
-          $ref: '#/definitions/library.CreditRecord'
-        type: array
-      summary:
-        $ref: '#/definitions/library.CreditSummary'
-    type: object
-  library.CreditRecord:
-    properties:
-      location:
-        description: 地点及备注
-        type: string
-      subtitle:
-        description: 扣分及时间
-        type: string
-      title:
-        description: 原因标题
-        type: string
-    type: object
-  library.CreditSummary:
-    properties:
-      remain:
-        type: string
-      system:
-        description: 个人预约制度
-        type: string
-      total:
-        type: string
-    type: object
   library.DisableTime:
     properties:
       end:
@@ -1136,11 +1105,6 @@ definitions:
         type: string
       start:
         type: string
-    type: object
-  library.GetCreditPointResponse:
-    properties:
-      creditPoints:
-        $ref: '#/definitions/library.CreditPoints'
     type: object
   library.GetDiscussionRequest:
     properties:
@@ -1291,25 +1255,6 @@ definitions:
       stu_id:
         type: string
     type: object
-  library.ReserveDiscussionRequest:
-    properties:
-      dev_id:
-        type: string
-      end:
-        type: string
-      kind_id:
-        type: string
-      lab_id:
-        type: string
-      list:
-        items:
-          type: string
-        type: array
-      start:
-        type: string
-      title:
-        type: string
-    type: object
   library.ReserveSeatRandomlyRequest:
     properties:
       end:
@@ -1354,22 +1299,6 @@ definitions:
         items:
           $ref: '#/definitions/library.Seat'
         type: array
-    type: object
-  library.Search:
-    properties:
-      Pid:
-        type: string
-      id:
-        type: string
-      label:
-        type: string
-      name:
-        type: string
-    type: object
-  library.SearchUserResponse:
-    properties:
-      search:
-        $ref: '#/definitions/library.Search'
     type: object
   library.Seat:
     properties:

@@ -57,27 +57,6 @@ type Record struct {
 	Status    string `json:"status"`
 }
 
-type GetCreditPointResponse struct {
-	CreditPoints CreditPoints
-}
-
-type CreditPoints struct {
-	Summary CreditSummary  `json:"summary"`
-	Records []CreditRecord `json:"records"`
-}
-
-type CreditSummary struct {
-	System string `json:"system"` // 个人预约制度
-	Remain string `json:"remain"`
-	Total  string `json:"total"`
-}
-
-type CreditRecord struct {
-	Title    string `json:"title"`    // 原因标题
-	Subtitle string `json:"subtitle"` // 扣分及时间
-	Location string `json:"location"` // 地点及备注
-}
-
 type GetDiscussionRequest struct {
 	RoomTypeID string `json:"room_type_id"`
 	VenueID    string `json:"venue_id"`
@@ -100,31 +79,6 @@ type Discussion struct {
 type DisableTime struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
-}
-
-type SearchUserRequest struct {
-	StudentID string `form:"student_id" binding:"required"`
-}
-
-type SearchUserResponse struct {
-	Search Search
-}
-
-type Search struct {
-	ID    string `json:"id"`
-	Pid   string `json:"Pid"`
-	Name  string `json:"name"`
-	Label string `json:"label"`
-}
-
-type ReserveDiscussionRequest struct {
-	DevID  string   `json:"dev_id"`
-	LabID  string   `json:"lab_id"`
-	KindID string   `json:"kind_id"`
-	Title  string   `json:"title"`
-	Start  string   `json:"start"`
-	End    string   `json:"end"`
-	List   []string `json:"list"`
 }
 
 type CancelReserveRequest struct {

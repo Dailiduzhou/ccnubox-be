@@ -5666,52 +5666,6 @@ const docTemplate = `{
                 }
             }
         },
-        "library.CreditPoints": {
-            "type": "object",
-            "properties": {
-                "records": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/library.CreditRecord"
-                    }
-                },
-                "summary": {
-                    "$ref": "#/definitions/library.CreditSummary"
-                }
-            }
-        },
-        "library.CreditRecord": {
-            "type": "object",
-            "properties": {
-                "location": {
-                    "description": "地点及备注",
-                    "type": "string"
-                },
-                "subtitle": {
-                    "description": "扣分及时间",
-                    "type": "string"
-                },
-                "title": {
-                    "description": "原因标题",
-                    "type": "string"
-                }
-            }
-        },
-        "library.CreditSummary": {
-            "type": "object",
-            "properties": {
-                "remain": {
-                    "type": "string"
-                },
-                "system": {
-                    "description": "个人预约制度",
-                    "type": "string"
-                },
-                "total": {
-                    "type": "string"
-                }
-            }
-        },
         "library.DisableTime": {
             "type": "object",
             "properties": {
@@ -5757,14 +5711,6 @@ const docTemplate = `{
                 },
                 "start": {
                     "type": "string"
-                }
-            }
-        },
-        "library.GetCreditPointResponse": {
-            "type": "object",
-            "properties": {
-                "creditPoints": {
-                    "$ref": "#/definitions/library.CreditPoints"
                 }
             }
         },
@@ -5991,35 +5937,6 @@ const docTemplate = `{
                 }
             }
         },
-        "library.ReserveDiscussionRequest": {
-            "type": "object",
-            "properties": {
-                "dev_id": {
-                    "type": "string"
-                },
-                "end": {
-                    "type": "string"
-                },
-                "kind_id": {
-                    "type": "string"
-                },
-                "lab_id": {
-                    "type": "string"
-                },
-                "list": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "start": {
-                    "type": "string"
-                },
-                "title": {
-                    "type": "string"
-                }
-            }
-        },
         "library.ReserveSeatRandomlyRequest": {
             "type": "object",
             "properties": {
@@ -6086,31 +6003,6 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/library.Seat"
                     }
-                }
-            }
-        },
-        "library.Search": {
-            "type": "object",
-            "properties": {
-                "Pid": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "label": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
-        "library.SearchUserResponse": {
-            "type": "object",
-            "properties": {
-                "search": {
-                    "$ref": "#/definitions/library.Search"
                 }
             }
         },
