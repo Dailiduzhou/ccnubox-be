@@ -10,7 +10,6 @@ require (
 	github.com/asynccnu/ccnubox-be/common v0.0.0-00010101000000-000000000000
 	github.com/avast/retry-go/v4 v4.7.0
 	github.com/go-kratos/kratos/v2 v2.9.2
-	github.com/go-redsync/redsync/v4 v4.15.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/wire v0.7.0
 	github.com/joho/godotenv v1.5.1
